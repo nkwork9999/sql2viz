@@ -2,14 +2,8 @@ use anyhow::Result;
 use duckdb::{params, Connection, Row};
 use thiserror::Error;
 
-#[cfg(feature = "tabled-backend")]
-use tabled::{builder::Builder as TabledBuilder, settings::Style};
-
-#[cfg(feature = "comfy-backend")]
-use comfy_table::{presets, Cell, ContentArrangement, Table as ComfyTable};
-
-#[cfg(feature = "colored")]
-use colored::Colorize;
+#[cfg(feature = "gui")]
+use dioxus::prelude::*;
 
 /// Custom error types for the library
 #[derive(Error, Debug)]
@@ -22,63 +16,18 @@ pub enum DuckTableError {
 
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
-
-    #[error("No backend selected. Enable either 'tabled-backend' or 'comfy-backend' feature")]
-    NoBackendError,
-}
-
-/// Table style presets
-#[derive(Debug, Clone, Copy)]
-pub enum TableStyle {
-    Ascii,
-    Unicode,
-    Rounded,
-    Markdown,
-    Minimal,
-    Blank,
-    Custom,
-}
-
-/// Display backend selection
-#[derive(Debug, Clone, Copy)]
-pub enum DisplayBackend {
-    #[cfg(feature = "tabled-backend")]
-    Tabled,
-    #[cfg(feature = "comfy-backend")]
-    Comfy,
-    Auto,
-}
-
-/// Configuration for table display
-#[derive(Debug, Clone)]
-pub struct DisplayConfig {
-    pub style: TableStyle,
-    pub backend: DisplayBackend,
-    pub max_column_width: usize,
-    pub show_row_numbers: bool,
-    #[cfg(feature = "colored")]
-    pub colored_headers: bool,
-    pub row_limit: usize,
-}
-
-impl Default for DisplayConfig {
-    fn default() -> Self {
-        Self {
-            style: TableStyle::Unicode,
-            backend: DisplayBackend::Auto,
-            max_column_width: 50,
-            show_row_numbers: false,
-            #[cfg(feature = "colored")]
-            colored_headers: true,
-            row_limit: 0,
-        }
-    }
 }
 
 /// Main struct for executing queries and displaying results
 pub struct DuckTable {
     connection: Connection,
-    config: DisplayConfig,
+}
+
+/// Result of a query execution (used for GUI mode)
+#[derive(Debug, Clone, PartialEq)]
+pub struct QueryResult {
+    pub column_names: Vec<String>,
+    pub rows: Vec<Vec<String>>,
 }
 
 impl DuckTable {
@@ -86,7 +35,6 @@ impl DuckTable {
     pub fn new() -> Result<Self> {
         Ok(Self {
             connection: Connection::open_in_memory()?,
-            config: DisplayConfig::default(),
         })
     }
 
@@ -94,130 +42,120 @@ impl DuckTable {
     pub fn with_file(path: &str) -> Result<Self> {
         Ok(Self {
             connection: Connection::open(path)?,
-            config: DisplayConfig::default(),
         })
     }
 
     /// Create with existing connection
     pub fn with_connection(connection: Connection) -> Self {
-        Self {
-            connection,
-            config: DisplayConfig::default(),
-        }
-    }
-
-    /// Set display configuration
-    pub fn set_config(&mut self, config: DisplayConfig) {
-        self.config = config;
+        Self { connection }
     }
 
     /// Execute a SQL query and return formatted table as string
     pub fn query(&self, sql: &str) -> Result<String> {
+        let result = self.query_raw(sql)?;
+        Ok(format!("Query returned {} rows", result.rows.len()))
+    }
+
+    /// Execute a SQL query and return raw QueryResult (for GUI or custom processing)
+    pub fn query_raw(&self, sql: &str) -> Result<QueryResult> {
         let mut stmt = self.connection.prepare(sql)?;
         let mut rows = stmt.query(params![])?;
-        
-        // Use rows.as_ref() to access the statement and get column information
-        // This is the correct way to get metadata while iterating
-        let stmt_ref = rows.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("Failed to get statement reference")
-        })?;
-        
+
+        let stmt_ref = rows
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Failed to get statement reference"))?;
+
         let column_count = stmt_ref.column_count();
         let mut column_names = Vec::new();
-        
+
         for i in 0..column_count {
-            let name = stmt_ref.column_name(i)
+            let name = stmt_ref
+                .column_name(i)
                 .map(|s| s.to_string())
                 .unwrap_or_else(|_| format!("col_{}", i));
             column_names.push(name);
         }
-        
+
         if column_count == 0 {
-            return Ok("(empty result)".to_string());
+            return Ok(QueryResult {
+                column_names: vec![],
+                rows: vec![],
+            });
         }
-        
-        // Collect all data
+
         let mut all_rows = Vec::new();
-        
+
         while let Some(row) = rows.next()? {
             let mut row_values = Vec::new();
-            
+
             for i in 0..column_count {
                 let value = self.extract_value_from_row(row, i);
                 row_values.push(value);
             }
-            
+
             all_rows.push(row_values);
-            
-            if self.config.row_limit > 0 && all_rows.len() >= self.config.row_limit {
-                break;
-            }
         }
 
-        self.format_table(&column_names, &all_rows)
+        Ok(QueryResult {
+            column_names,
+            rows: all_rows,
+        })
     }
 
     /// Extract value from a row safely
     fn extract_value_from_row(&self, row: &Row, index: usize) -> String {
         use duckdb::types::ValueRef;
-        
+
         match row.get_ref(index) {
-            Ok(value_ref) => {
-                match value_ref {
-                    ValueRef::Null => "NULL".to_string(),
-                    ValueRef::Boolean(b) => b.to_string(),
-                    ValueRef::TinyInt(i) => i.to_string(),
-                    ValueRef::SmallInt(i) => i.to_string(),
-                    ValueRef::Int(i) => i.to_string(),
-                    ValueRef::BigInt(i) => i.to_string(),
-                    ValueRef::HugeInt(i) => i.to_string(),
-                    ValueRef::UTinyInt(i) => i.to_string(),
-                    ValueRef::USmallInt(i) => i.to_string(),
-                    ValueRef::UInt(i) => i.to_string(),
-                    ValueRef::UBigInt(i) => i.to_string(),
-                    ValueRef::Float(f) => {
-                        if f.fract() == 0.0 && f.abs() < 1e10 {
-                            format!("{:.0}", f)
-                        } else {
-                            format!("{:.2}", f)
-                        }
-                    },
-                    ValueRef::Double(d) => {
-                        if d.fract() == 0.0 && d.abs() < 1e10 {
-                            format!("{:.0}", d)
-                        } else {
-                            format!("{:.2}", d)
-                        }
-                    },
-                    ValueRef::Decimal(decimal) => {
-                        // Convert decimal to f64 for display
-                        format!("{:.2}", decimal.to_string().parse::<f64>().unwrap_or(0.0))
-                    },
-                    ValueRef::Text(bytes) => {
-                        String::from_utf8_lossy(bytes).to_string()
-                    },
-                    ValueRef::Blob(bytes) => {
-                        if let Ok(s) = std::str::from_utf8(bytes) {
-                            s.to_string()
-                        } else {
-                            format!("<blob {} bytes>", bytes.len())
-                        }
-                    },
-                    ValueRef::Date32(days) => {
-                        format!("Date({})", days)
-                    },
-                    ValueRef::Timestamp(_, micros) => {
-                        format!("Timestamp({})", micros)
-                    },
-                    ValueRef::Time64(_, nanos) => {
-                        format!("Time({})", nanos)
-                    },
-                    // Handle any other variants
-                    _ => format!("{:?}", value_ref)
+            Ok(value_ref) => match value_ref {
+                ValueRef::Null => "NULL".to_string(),
+                ValueRef::Boolean(b) => b.to_string(),
+                ValueRef::TinyInt(i) => i.to_string(),
+                ValueRef::SmallInt(i) => i.to_string(),
+                ValueRef::Int(i) => i.to_string(),
+                ValueRef::BigInt(i) => i.to_string(),
+                ValueRef::HugeInt(i) => i.to_string(),
+                ValueRef::UTinyInt(i) => i.to_string(),
+                ValueRef::USmallInt(i) => i.to_string(),
+                ValueRef::UInt(i) => i.to_string(),
+                ValueRef::UBigInt(i) => i.to_string(),
+                ValueRef::Float(f) => {
+                    if f.fract() == 0.0 && f.abs() < 1e10 {
+                        format!("{:.0}", f)
+                    } else {
+                        format!("{:.2}", f)
+                    }
                 }
-            }
+                ValueRef::Double(d) => {
+                    if d.fract() == 0.0 && d.abs() < 1e10 {
+                        format!("{:.0}", d)
+                    } else {
+                        format!("{:.2}", d)
+                    }
+                }
+                ValueRef::Decimal(decimal) => {
+                    format!("{:.2}", decimal.to_string().parse::<f64>().unwrap_or(0.0))
+                }
+                ValueRef::Text(bytes) => String::from_utf8_lossy(bytes).to_string(),
+                ValueRef::Blob(bytes) => {
+                    if let Ok(s) = std::str::from_utf8(bytes) {
+                        s.to_string()
+                    } else {
+                        format!("<blob {} bytes>", bytes.len())
+                    }
+                }
+                ValueRef::Date32(days) => {
+                    format!("Date({})", days)
+                }
+                ValueRef::Timestamp(_, micros) => {
+                    format!("Timestamp({})", micros)
+                }
+                ValueRef::Time64(_, nanos) => {
+                    format!("Time({})", nanos)
+                }
+                _ => format!("{:?}", value_ref),
+            },
             Err(_) => {
-                // Fallback: try to get as string
                 if let Ok(s) = row.get::<_, String>(index) {
                     s
                 } else if let Ok(Some(s)) = row.get::<_, Option<String>>(index) {
@@ -228,136 +166,6 @@ impl DuckTable {
                     "?".to_string()
                 }
             }
-        }
-    }
-    
-    /// Format the table based on selected backend
-    fn format_table(&self, headers: &[String], rows: &[Vec<String>]) -> Result<String> {
-        match self.config.backend {
-            #[cfg(feature = "tabled-backend")]
-            DisplayBackend::Tabled => self.format_with_tabled(headers, rows),
-
-            #[cfg(feature = "comfy-backend")]
-            DisplayBackend::Comfy => self.format_with_comfy(headers, rows),
-
-            DisplayBackend::Auto => {
-                #[cfg(feature = "tabled-backend")]
-                return self.format_with_tabled(headers, rows);
-
-                #[cfg(all(not(feature = "tabled-backend"), feature = "comfy-backend"))]
-                return self.format_with_comfy(headers, rows);
-
-                #[cfg(all(not(feature = "tabled-backend"), not(feature = "comfy-backend")))]
-                Err(DuckTableError::NoBackendError.into())
-            }
-        }
-    }
-
-    #[cfg(feature = "tabled-backend")]
-    fn format_with_tabled(&self, headers: &[String], rows: &[Vec<String>]) -> Result<String> {
-        let mut builder = TabledBuilder::new();
-
-        let mut header_row = if self.config.show_row_numbers {
-            let mut h = vec!["#".to_string()];
-            h.extend(headers.iter().cloned());
-            h
-        } else {
-            headers.to_vec()
-        };
-
-        #[cfg(feature = "colored")]
-        if self.config.colored_headers {
-            header_row = header_row.iter().map(|h| h.bold().blue().to_string()).collect();
-        }
-
-        builder.push_record(header_row);
-
-        for (idx, row) in rows.iter().enumerate() {
-            let mut row_data = if self.config.show_row_numbers {
-                vec![(idx + 1).to_string()]
-            } else {
-                vec![]
-            };
-
-            for value in row {
-                let truncated = if self.config.max_column_width > 0 && value.len() > self.config.max_column_width {
-                    format!("{}...", &value[..self.config.max_column_width.saturating_sub(3)])
-                } else {
-                    value.clone()
-                };
-                row_data.push(truncated);
-            }
-
-            builder.push_record(row_data);
-        }
-
-        let mut table = builder.build();
-        
-        match self.config.style {
-            TableStyle::Ascii => table.with(Style::ascii()),
-            TableStyle::Unicode => table.with(Style::modern()),
-            TableStyle::Rounded => table.with(Style::modern_rounded()),
-            TableStyle::Markdown => table.with(Style::markdown()),
-            TableStyle::Minimal => table.with(Style::extended()),
-            TableStyle::Blank => table.with(Style::blank()),
-            TableStyle::Custom => table.with(Style::modern()),
-        };
-
-        Ok(table.to_string())
-    }
-
-    #[cfg(feature = "comfy-backend")]
-    fn format_with_comfy(&self, headers: &[String], rows: &[Vec<String>]) -> Result<String> {
-        let mut table = ComfyTable::new();
-        table.set_content_arrangement(ContentArrangement::Dynamic);
-        if self.config.max_column_width > 0 && !headers.is_empty() {
-             table.set_width((self.config.max_column_width * headers.len()) as u16);
-        }
-
-        let mut header_cells = Vec::new();
-        if self.config.show_row_numbers {
-            header_cells.push(Cell::new("#"));
-        }
-        for header in headers {
-            #[cfg(feature = "colored")]
-            let header_text = if self.config.colored_headers {
-                header.bold().blue().to_string()
-            } else {
-                header.clone()
-            };
-            #[cfg(not(feature = "colored"))]
-            let header_text = header.clone();
-
-            header_cells.push(Cell::new(header_text));
-        }
-        table.set_header(header_cells);
-
-        for (idx, row) in rows.iter().enumerate() {
-            let mut row_cells = Vec::new();
-            if self.config.show_row_numbers {
-                row_cells.push(Cell::new(idx + 1));
-            }
-            for value in row {
-                row_cells.push(Cell::new(value));
-            }
-            table.add_row(row_cells);
-        }
-        
-        table.load_preset(self.get_comfy_preset());
-
-        Ok(table.to_string())
-    }
-
-    #[cfg(feature = "comfy-backend")]
-    fn get_comfy_preset(&self) -> &str {
-        match self.config.style {
-            TableStyle::Ascii => presets::ASCII_FULL,
-            TableStyle::Unicode => presets::UTF8_FULL,
-            TableStyle::Rounded => presets::UTF8_ROUND_CORNERS,
-            TableStyle::Markdown => presets::ASCII_MARKDOWN,
-            TableStyle::Minimal => presets::UTF8_HORIZONTAL_ONLY,
-            TableStyle::Blank => presets::NOTHING,
-            TableStyle::Custom => presets::UTF8_FULL,
         }
     }
 
@@ -383,88 +191,391 @@ impl DuckTable {
     }
 }
 
-/// Builder pattern for configuring DuckTable
-#[derive(Default)]
-pub struct DuckTableBuilder {
-    path: Option<String>,
-    config: DisplayConfig,
+// ============================================================================
+// GUI Components (enabled with "gui" feature) - Dioxus Implementation
+// ============================================================================
+
+#[cfg(feature = "gui")]
+#[component]
+fn DuckDbViewer() -> Element {
+    let mut query_text = use_signal(|| String::new());
+    let mut query_result = use_signal(|| None::<QueryResult>);
+    let mut error_message = use_signal(|| None::<String>);
+
+    let execute_query = move |_| {
+        let query = query_text.read().clone();
+        error_message.set(None);
+
+        match DuckTable::new() {
+            Ok(duck_table) => match duck_table.query_raw(&query) {
+                Ok(result) => {
+                    query_result.set(Some(result));
+                }
+                Err(e) => {
+                    error_message.set(Some(e.to_string()));
+                    query_result.set(None);
+                }
+            },
+            Err(e) => {
+                error_message.set(Some(format!("Failed to create DuckTable: {}", e)));
+                query_result.set(None);
+            }
+        }
+    };
+
+    let clear_all = move |_| {
+        query_text.set(String::new());
+        query_result.set(None);
+        error_message.set(None);
+    };
+
+    rsx! {
+        div {
+            style: "display: flex; flex-direction: column; height: 100vh; font-family: sans-serif;",
+            
+            // Top Panel
+            div {
+                style: "display: flex; justify-content: space-between; align-items: center; padding: 16px; background-color: #f5f5f5; border-bottom: 1px solid #ddd;",
+                h1 { style: "margin: 0;", "🦆 DuckDB Query Viewer" }
+                button {
+                    style: "padding: 8px 16px; cursor: pointer;",
+                    onclick: clear_all,
+                    "Clear"
+                }
+            }
+
+            // Main Content
+            div {
+                style: "flex: 1; padding: 16px; overflow: auto;",
+                
+                // Query Input Section
+                div {
+                    style: "margin-bottom: 16px;",
+                    div {
+                        style: "display: flex; align-items: center; gap: 8px; margin-bottom: 8px;",
+                        label { "SQL Query:" }
+                        button {
+                            style: "padding: 6px 12px; cursor: pointer; background-color: #4CAF50; color: white; border: none; border-radius: 4px;",
+                            onclick: execute_query,
+                            "▶ Execute"
+                        }
+                    }
+                    textarea {
+                        style: "width: 100%; min-height: 150px; font-family: monospace; padding: 8px; border: 1px solid #ccc; border-radius: 4px;",
+                        value: "{query_text}",
+                        oninput: move |evt| query_text.set(evt.value().clone()),
+                        placeholder: "Enter SQL query here..."
+                    }
+                }
+
+                hr { style: "margin: 20px 0;" }
+
+                // Error Display
+                if let Some(error) = error_message.read().as_ref() {
+                    div {
+                        style: "color: red; margin-bottom: 16px; padding: 8px; background-color: #ffebee; border-radius: 4px;",
+                        "❌ Error: {error}"
+                    }
+                }
+
+                // Results Display
+                if let Some(result) = query_result.read().as_ref() {
+                    div {
+                        div {
+                            style: "margin-bottom: 8px; font-weight: bold;",
+                            "📊 Results: {result.rows.len()} rows × {result.column_names.len()} columns"
+                        }
+                        hr { style: "margin: 12px 0;" }
+                        div {
+                            style: "overflow: auto;",
+                            ResultsTable { result: result.clone() }
+                        }
+                    }
+                } else {
+                    div {
+                        style: "display: flex; justify-content: center; align-items: center; height: 200px; color: #999;",
+                        "Execute a query to see results"
+                    }
+                }
+            }
+        }
+    }
 }
 
-impl DuckTableBuilder {
-    pub fn new() -> Self {
-        Self::default()
+#[cfg(feature = "gui")]
+#[component]
+fn ResultsTable(result: QueryResult) -> Element {
+    rsx! {
+        table {
+            style: "border-collapse: collapse; width: 100%; background-color: white;",
+            thead {
+                tr {
+                    style: "background-color: #f0f0f0;",
+                    for col_name in &result.column_names {
+                        th {
+                            style: "border: 1px solid #ddd; padding: 12px; text-align: left; font-weight: bold;",
+                            "{col_name}"
+                        }
+                    }
+                }
+            }
+            tbody {
+                for (idx, row) in result.rows.iter().enumerate() {
+                    tr {
+                        style: if idx % 2 == 0 { "background-color: #fafafa;" } else { "" },
+                        for cell_value in row {
+                            td {
+                                style: "border: 1px solid #ddd; padding: 8px;",
+                                "{cell_value}"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Launch the DuckDB Query Viewer GUI (requires "gui" feature)
+#[cfg(feature = "gui")]
+pub fn launch_gui() -> Result<()> {
+    dioxus::launch(DuckDbViewer);
+    Ok(())
+}
+
+// ============================================================================
+// Simple Table Viewer with Tabs
+// ============================================================================
+
+#[cfg(feature = "gui")]
+#[derive(Clone, PartialEq)]
+pub struct QueryTab {
+    pub name: String,
+    pub result: Option<QueryResult>,
+    pub error: Option<String>,
+}
+
+#[cfg(feature = "gui")]
+#[component]
+fn SimpleTableViewer(sql: String) -> Element {
+    let tabs = use_signal(|| {
+        println!("SimpleTableViewer initializing with SQL ({} bytes)", sql.len());
+        execute_queries(&sql)
+    });
+    let mut selected_tab = use_signal(|| 0usize);
+
+    rsx! {
+        div {
+            style: "display: flex; flex-direction: column; height: 100vh; font-family: sans-serif;",
+            
+            if tabs.read().is_empty() {
+                div {
+                    style: "display: flex; justify-content: center; align-items: center; height: 100vh; color: #999;",
+                    "⚠️ No queries to display. Please provide a SQL query."
+                }
+            } else {
+                // Tab Bar
+                if tabs.read().len() > 1 {
+                    div {
+                        style: "display: flex; gap: 4px; padding: 8px; background-color: #f5f5f5; border-bottom: 1px solid #ddd;",
+                        for (idx, tab) in tabs.read().iter().enumerate() {
+                            button {
+                                style: if *selected_tab.read() == idx {
+                                    "padding: 8px 16px; cursor: pointer; background-color: white; border: 1px solid #ddd; border-bottom: none; border-radius: 4px 4px 0 0;"
+                                } else {
+                                    "padding: 8px 16px; cursor: pointer; background-color: #e0e0e0; border: 1px solid #ddd; border-radius: 4px 4px 0 0;"
+                                },
+                                onclick: move |_| selected_tab.set(idx),
+                                "{tab.name}"
+                            }
+                        }
+                    }
+                }
+
+                // Tab Content
+                div {
+                    style: "flex: 1; padding: 16px; overflow: auto;",
+                    if let Some(current_tab) = tabs.read().get(*selected_tab.read()) {
+                        if let Some(error) = &current_tab.error {
+                            div {
+                                style: "color: #d32f2f; padding: 16px; background-color: #ffebee; border-left: 4px solid #d32f2f; border-radius: 4px;",
+                                h3 { style: "margin-top: 0;", "❌ Error in {current_tab.name}" }
+                                pre {
+                                    style: "white-space: pre-wrap; word-wrap: break-word; font-family: monospace; margin-top: 12px;",
+                                    "{error}"
+                                }
+                            }
+                        } else if let Some(result) = &current_tab.result {
+                            div {
+                                h2 {
+                                    style: "margin-top: 0; color: #1976d2;",
+                                    "📊 {current_tab.name} Results"
+                                }
+                                div {
+                                    style: "margin: 12px 0; color: #666;",
+                                    "{result.rows.len()} rows × {result.column_names.len()} columns"
+                                }
+                                hr { style: "margin: 16px 0; border: none; border-top: 1px solid #e0e0e0;" }
+                                div {
+                                    style: "overflow: auto;",
+                                    ResultsTable { result: result.clone() }
+                                }
+                            }
+                        } else {
+                            div {
+                                style: "display: flex; justify-content: center; align-items: center; height: 200px; color: #999;",
+                                "⚠️ No results available"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "gui")]
+fn execute_queries(sql: &str) -> Vec<QueryTab> {
+    let mut tabs = Vec::new();
+
+    // 空のクエリチェック
+    if sql.trim().is_empty() {
+        tabs.push(QueryTab {
+            name: "Error".to_string(),
+            result: None,
+            error: Some("No query provided. Please provide a SQL query.".to_string()),
+        });
+        return tabs;
     }
 
-    pub fn path(mut self, path: impl Into<String>) -> Self {
-        self.path = Some(path.into());
-        self
+    let duck_table = match DuckTable::new() {
+        Ok(dt) => dt,
+        Err(e) => {
+            tabs.push(QueryTab {
+                name: "Error".to_string(),
+                result: None,
+                error: Some(format!("Failed to create DuckTable: {}", e)),
+            });
+            return tabs;
+        }
+    };
+
+    // Split by semicolon and execute multiple queries
+    let queries: Vec<&str> = sql
+        .split(';')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    println!("Found {} queries to execute", queries.len());
+
+    if queries.is_empty() {
+        tabs.push(QueryTab {
+            name: "Error".to_string(),
+            result: None,
+            error: Some("No valid queries found. Please check your SQL syntax.".to_string()),
+        });
+        return tabs;
     }
 
-    pub fn style(mut self, style: TableStyle) -> Self {
-        self.config.style = style;
-        self
+    for (idx, query) in queries.iter().enumerate() {
+        let tab_name = format!("Query {}", idx + 1);
+        println!("Executing query {}: {} bytes", idx + 1, query.len());
+
+        match duck_table.query_raw(query) {
+            Ok(result) => {
+                println!("Query {} succeeded: {} rows", idx + 1, result.rows.len());
+                tabs.push(QueryTab {
+                    name: tab_name,
+                    result: Some(result),
+                    error: None,
+                });
+            }
+            Err(e) => {
+                println!("Query {} failed: {}", idx + 1, e);
+                tabs.push(QueryTab {
+                    name: tab_name,
+                    result: None,
+                    error: Some(e.to_string()),
+                });
+            }
+        }
     }
 
-    pub fn backend(mut self, backend: DisplayBackend) -> Self {
-        self.config.backend = backend;
-        self
+    tabs
+}
+
+// Global SQL storage for simple GUI mode
+#[cfg(feature = "gui")]
+static SQL_STORAGE: std::sync::OnceLock<std::sync::Mutex<String>> = std::sync::OnceLock::new();
+
+/// Launch a simple GUI that only shows query results (requires "gui" feature)
+#[cfg(feature = "gui")]
+pub fn launch_simple_gui(sql: String) -> Result<()> {
+    // 空のクエリチェック
+    if sql.trim().is_empty() {
+        return Err(anyhow::anyhow!("No SQL query provided"));
     }
-
-    pub fn max_column_width(mut self, width: usize) -> Self {
-        self.config.max_column_width = width;
-        self
+    
+    // デバッグ出力
+    println!("Setting SQL query ({} bytes)", sql.len());
+    println!("First 100 chars: {}", &sql[..sql.len().min(100)]);
+    
+    // 初期化して値を設定
+    if let Err(existing_value) = SQL_STORAGE.set(std::sync::Mutex::new(sql.clone())) {
+        // Already initialized, this shouldn't happen in normal usage
+        eprintln!("Warning: SQL_STORAGE already initialized");
+        // Try to update the existing value
+        if let Some(storage) = SQL_STORAGE.get() {
+            if let Ok(mut guard) = storage.lock() {
+                *guard = sql;
+                println!("Updated existing SQL storage with new query");
+            }
+        }
     }
+    
+    dioxus::launch(SimpleTableViewerApp);
+    Ok(())
+}
 
-    pub fn show_row_numbers(mut self, show: bool) -> Self {
-        self.config.show_row_numbers = show;
-        self
-    }
-
-    #[cfg(feature = "colored")]
-    pub fn colored_headers(mut self, colored: bool) -> Self {
-        self.config.colored_headers = colored;
-        self
-    }
-
-    pub fn row_limit(mut self, limit: usize) -> Self {
-        self.config.row_limit = limit;
-        self
-    }
-
-    pub fn build(self) -> Result<DuckTable> {
-        let connection = match self.path {
-            Some(path) => Connection::open(path)?,
-            None => Connection::open_in_memory()?,
-        };
-
-        Ok(DuckTable {
-            connection,
-            config: self.config,
+#[cfg(feature = "gui")]
+#[component]
+fn SimpleTableViewerApp() -> Element {
+    let sql = SQL_STORAGE
+        .get()
+        .map(|storage| {
+            match storage.lock() {
+                Ok(guard) => {
+                    let sql_content = guard.clone();
+                    println!("Retrieved SQL query ({} bytes)", sql_content.len());
+                    sql_content
+                }
+                Err(e) => {
+                    eprintln!("Error: Failed to lock SQL_STORAGE: {}", e);
+                    String::new()
+                }
+            }
         })
+        .unwrap_or_else(|| {
+            eprintln!("Error: SQL_STORAGE not initialized - this should not happen");
+            String::new()
+        });
+    
+    if sql.is_empty() {
+        return rsx! {
+            div {
+                style: "display: flex; justify-content: center; align-items: center; height: 100vh; color: #d32f2f; font-family: sans-serif;",
+                div {
+                    style: "text-align: center; padding: 32px; background-color: #ffebee; border-radius: 8px; border: 2px solid #d32f2f;",
+                    h1 { style: "margin-top: 0;", "⚠️ Initialization Error" }
+                    p { "SQL query was not properly initialized." }
+                    p { style: "font-size: 0.9em; color: #666;", "Please check the application logs for more details." }
+                }
+            }
+        };
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_basic_query() {
-        let duck = DuckTable::new().unwrap();
-        let result = duck.query("SELECT 42 as answer, 'hello' as greeting").unwrap();
-        assert!(result.contains("42"));
-        assert!(result.contains("hello"));
-    }
-
-    #[test]
-    fn test_builder_pattern() {
-        let duck = DuckTableBuilder::new()
-            .style(TableStyle::Ascii)
-            .show_row_numbers(true)
-            .build()
-            .unwrap();
-
-        let result = duck.query("SELECT 1 as num").unwrap();
-        assert!(result.contains("1"));
+    
+    rsx! {
+        SimpleTableViewer { sql: sql }
     }
 }
