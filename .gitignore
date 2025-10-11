@@ -1,0 +1,28 @@
+# Rust/Cargoが生成するビルドファイル
+# 最も重要な設定！
+/target/
+
+# Cargo.lock はアプリケーションの場合はコミットし、ライブラリの場合は無視することがあります。
+# 詳細は後述しますが、迷ったらコメントアウト（コミット対象にする）でOKです。
+# Cargo.lock
+
+# ベンチマークテストの結果
+/criterion/
+
+# エディタやIDEの設定ファイル
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OSが自動生成するファイル
+.DS_Store
+Thumbs.db
+
+# 環境変数ファイル（APIキーなどの機密情報）
+.env
+.env.*
+!/.env.example
+
+# ログファイル
+*.log
