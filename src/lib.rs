@@ -2,9 +2,6 @@ use anyhow::Result;
 use duckdb::{params, Connection, Row};
 use thiserror::Error;
 
-#[cfg(feature = "gui")]
-use dioxus::prelude::*;
-
 /// Custom error types for the library
 #[derive(Error, Debug)]
 pub enum DuckTableError {
@@ -23,7 +20,7 @@ pub struct DuckTable {
     connection: Connection,
 }
 
-/// Result of a query execution (used for GUI mode)
+/// Result of a query execution
 #[derive(Debug, Clone, PartialEq)]
 pub struct QueryResult {
     pub column_names: Vec<String>,
@@ -56,7 +53,7 @@ impl DuckTable {
         Ok(format!("Query returned {} rows", result.rows.len()))
     }
 
-    /// Execute a SQL query and return raw QueryResult (for GUI or custom processing)
+    /// Execute a SQL query and return raw QueryResult
     pub fn query_raw(&self, sql: &str) -> Result<QueryResult> {
         let mut stmt = self.connection.prepare(sql)?;
         let mut rows = stmt.query(params![])?;
@@ -192,163 +189,87 @@ impl DuckTable {
 }
 
 // ============================================================================
-// GUI Components (enabled with "gui" feature) - Dioxus Implementation
+// GUI Components (enabled with "gui" feature) - Iced Implementation
 // ============================================================================
 
 #[cfg(feature = "gui")]
-const PLOTLY_JS: &str = include_str!("../assets/plotly-2.27.0.min.js");
+use iced::widget::{button, column, container, pick_list, row, scrollable, text, canvas};
 
 #[cfg(feature = "gui")]
-#[component]
-fn DuckDbViewer() -> Element {
-    let mut query_text = use_signal(|| String::new());
-    let mut query_result = use_signal(|| None::<QueryResult>);
-    let mut error_message = use_signal(|| None::<String>);
+use iced::{Alignment, Element, Length, Task, Theme, Color, Point, Rectangle, Size, Font};
+#[cfg(feature = "gui")]
+use std::sync::{Arc, Mutex};
 
-    let execute_query = move |_| {
-        let query = query_text.read().clone();
-        error_message.set(None);
+#[cfg(feature = "gui")]
+static SQL_STORAGE: std::sync::OnceLock<Arc<Mutex<String>>> = std::sync::OnceLock::new();
 
-        match DuckTable::new() {
-            Ok(duck_table) => match duck_table.query_raw(&query) {
-                Ok(result) => {
-                    query_result.set(Some(result));
-                }
-                Err(e) => {
-                    error_message.set(Some(e.to_string()));
-                    query_result.set(None);
-                }
-            },
-            Err(e) => {
-                error_message.set(Some(format!("Failed to create DuckTable: {}", e)));
-                query_result.set(None);
-            }
-        }
-    };
+#[cfg(feature = "gui")]
+#[derive(Debug, Clone)]
+pub enum Message {
+    TabSelected(usize),
+    ViewModeChanged(ViewMode),
+    ChartTypeChanged(ChartType),
+    XAxisColumnChanged(String),
+    YAxisColumnChanged(String),
+    None,
+}
 
-    let clear_all = move |_| {
-        query_text.set(String::new());
-        query_result.set(None);
-        error_message.set(None);
-    };
+#[cfg(feature = "gui")]
+#[derive(Debug, Clone, PartialEq)]
+pub enum ViewMode {
+    Table,
+    Chart,
+}
 
-    rsx! {
-        div {
-            style: "display: flex; flex-direction: column; height: 100vh; font-family: sans-serif;",
-            
-            div {
-                style: "display: flex; justify-content: space-between; align-items: center; padding: 16px; background-color: #f5f5f5; border-bottom: 1px solid #ddd;",
-                h1 { style: "margin: 0;", "🦆 DuckDB Query Viewer" }
-                button {
-                    style: "padding: 8px 16px; cursor: pointer;",
-                    onclick: clear_all,
-                    "Clear"
-                }
-            }
+#[cfg(feature = "gui")]
+impl ViewMode {
+    fn all() -> Vec<ViewMode> {
+        vec![ViewMode::Table, ViewMode::Chart]
+    }
+}
 
-            div {
-                style: "flex: 1; padding: 16px; overflow: auto;",
-                
-                div {
-                    style: "margin-bottom: 16px;",
-                    div {
-                        style: "display: flex; align-items: center; gap: 8px; margin-bottom: 8px;",
-                        label { "SQL Query:" }
-                        button {
-                            style: "padding: 6px 12px; cursor: pointer; background-color: #4CAF50; color: white; border: none; border-radius: 4px;",
-                            onclick: execute_query,
-                            "▶ Execute"
-                        }
-                    }
-                    textarea {
-                        style: "width: 100%; min-height: 150px; font-family: monospace; padding: 8px; border: 1px solid #ccc; border-radius: 4px;",
-                        value: "{query_text}",
-                        oninput: move |evt| query_text.set(evt.value().clone()),
-                        placeholder: "Enter SQL query here..."
-                    }
-                }
-
-                hr { style: "margin: 20px 0;" }
-
-                if let Some(error) = error_message.read().as_ref() {
-                    div {
-                        style: "color: red; margin-bottom: 16px; padding: 8px; background-color: #ffebee; border-radius: 4px;",
-                        "❌ Error: {error}"
-                    }
-                }
-
-                if let Some(result) = query_result.read().as_ref() {
-                    div {
-                        div {
-                            style: "margin-bottom: 8px; font-weight: bold;",
-                            "📊 Results: {result.rows.len()} rows × {result.column_names.len()} columns"
-                        }
-                        hr { style: "margin: 12px 0;" }
-                        div {
-                            style: "overflow: auto;",
-                            ResultsTable { result: result.clone() }
-                        }
-                    }
-                } else {
-                    div {
-                        style: "display: flex; justify-content: center; align-items: center; height: 200px; color: #999;",
-                        "Execute a query to see results"
-                    }
-                }
-            }
+#[cfg(feature = "gui")]
+impl std::fmt::Display for ViewMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ViewMode::Table => write!(f, "📋 Table"),
+            ViewMode::Chart => write!(f, "📊 Chart"),
         }
     }
 }
 
 #[cfg(feature = "gui")]
-#[component]
-fn ResultsTable(result: QueryResult) -> Element {
-    rsx! {
-        table {
-            style: "border-collapse: collapse; width: 100%; background-color: white;",
-            thead {
-                tr {
-                    style: "background-color: #f0f0f0;",
-                    for col_name in &result.column_names {
-                        th {
-                            style: "border: 1px solid #ddd; padding: 12px; text-align: left; font-weight: bold;",
-                            "{col_name}"
-                        }
-                    }
-                }
-            }
-            tbody {
-                for (idx, row) in result.rows.iter().enumerate() {
-                    {
-                        let row_style = if idx % 2 == 0 { "background-color: #fafafa;" } else { "" };
-                        rsx! {
-                            tr {
-                                style: "{row_style}",
-                                for cell_value in row {
-                                    td {
-                                        style: "border: 1px solid #ddd; padding: 8px;",
-                                        "{cell_value}"
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ChartType {
+    Bar,
+    Line,
+    Area,
+    Scatter,
+}
+
+#[cfg(feature = "gui")]
+impl ChartType {
+    fn all() -> Vec<ChartType> {
+        vec![
+            ChartType::Bar,
+            ChartType::Line,
+            ChartType::Area,
+            ChartType::Scatter,
+        ]
     }
 }
 
-/// Launch the DuckDB Query Viewer GUI (requires "gui" feature)
 #[cfg(feature = "gui")]
-pub fn launch_gui() -> Result<()> {
-    dioxus::launch(DuckDbViewer);
-    Ok(())
+impl std::fmt::Display for ChartType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ChartType::Bar => write!(f, "📊 Bar Chart"),
+            ChartType::Line => write!(f, "📈 Line Chart"),
+            ChartType::Area => write!(f, "📉 Area Chart"),
+            ChartType::Scatter => write!(f, "🔵 Scatter Plot"),
+        }
+    }
 }
-
-// ============================================================================
-// Simple Table Viewer with Tabs
-// ============================================================================
 
 #[cfg(feature = "gui")]
 #[derive(Clone, PartialEq)]
@@ -359,561 +280,667 @@ pub struct QueryTab {
 }
 
 #[cfg(feature = "gui")]
-#[derive(Clone, Copy, PartialEq)]
-pub enum ChartType {
-    Bar,
-    Line,
-    Area,
-    Scatter,
-}
-
-#[cfg(feature = "gui")]
-impl ChartType {
-    fn as_str(&self) -> &str {
-        match self {
-            ChartType::Bar => "bar",
-            ChartType::Line => "line",
-            ChartType::Area => "area",
-            ChartType::Scatter => "scatter",
-        }
-    }
-    
-    fn icon(&self) -> &str {
-        match self {
-            ChartType::Bar => "📊",
-            ChartType::Line => "📈",
-            ChartType::Area => "📉",
-            ChartType::Scatter => "🔵",
-        }
-    }
-    
-    fn label(&self) -> &str {
-        match self {
-            ChartType::Bar => "Bar",
-            ChartType::Line => "Line",
-            ChartType::Area => "Area",
-            ChartType::Scatter => "Scatter",
-        }
-    }
-}
-
-#[cfg(feature = "gui")]
-#[component]
-fn SimpleTableViewer(sql: String) -> Element {
-    let tabs = use_signal(|| execute_queries(&sql));
-    let mut selected_tab = use_signal(|| 0usize);
-    let mut view_mode = use_signal(|| "table");
-    let mut plotly_loaded = use_signal(|| false);
-    let mut chart_type = use_signal(|| ChartType::Bar);
-
-    use_effect(move || {
-        spawn(async move {
-            let plotly_escaped = PLOTLY_JS
-                .replace('\\', "\\\\")
-                .replace('`', "\\`")
-                .replace("</script>", "<\\/script>");
-            
-            let inject_js = format!(
-                r#"
-                (function() {{
-                    if (typeof Plotly !== 'undefined') {{
-                        dioxus.send('READY');
-                        return;
-                    }}
-                    
-                    try {{
-                        var script = document.createElement('script');
-                        script.type = 'text/javascript';
-                        script.textContent = `{}`;
-                        document.head.appendChild(script);
-                        
-                        if (typeof Plotly !== 'undefined') {{
-                            dioxus.send('READY');
-                        }} else {{
-                            dioxus.send('ERROR');
-                        }}
-                    }} catch (e) {{
-                        dioxus.send('ERROR');
-                    }}
-                }})()
-                "#,
-                plotly_escaped
-            );
-            
-            let mut eval = document::eval(&inject_js);
-            if let Ok(status) = eval.recv::<String>().await {
-                if status == "READY" {
-                    plotly_loaded.set(true);
-                }
-            }
-        });
-    });
-
-    let is_empty = tabs.read().is_empty();
-    let has_multiple_tabs = tabs.read().len() > 1;
-    let current_tab_data = tabs.read().get(*selected_tab.read()).cloned();
-    let current_view_mode = *view_mode.read();
-    let is_plotly_loaded = *plotly_loaded.read();
-    let current_chart_type = *chart_type.read();
-    
-    rsx! {
-        div {
-            style: "display: flex; flex-direction: column; height: 100vh; font-family: sans-serif;",
-            
-            if is_empty {
-                div {
-                    style: "display: flex; justify-content: center; align-items: center; height: 100vh; color: #999;",
-                    "⚠️ No queries to display"
-                }
-            } else {
-                if has_multiple_tabs {
-                    div {
-                        style: "display: flex; gap: 4px; padding: 8px; background-color: #f5f5f5; border-bottom: 1px solid #ddd;",
-                        for (idx, tab) in tabs.read().iter().enumerate() {
-                            {
-                                let is_selected = *selected_tab.read() == idx;
-                                let btn_style = if is_selected {
-                                    "padding: 8px 16px; cursor: pointer; background-color: white; border: 1px solid #ddd; border-bottom: none; border-radius: 4px 4px 0 0;"
-                                } else {
-                                    "padding: 8px 16px; cursor: pointer; background-color: #e0e0e0; border: 1px solid #ddd; border-radius: 4px 4px 0 0;"
-                                };
-                                rsx! {
-                                    button {
-                                        key: "{idx}",
-                                        style: "{btn_style}",
-                                        onclick: move |_| selected_tab.set(idx),
-                                        "{tab.name}"
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                div {
-                    style: "flex: 1; padding: 16px; overflow: auto;",
-                    if let Some(current_tab) = current_tab_data {
-                        if let Some(error) = current_tab.error {
-                            div {
-                                style: "color: #d32f2f; padding: 16px; background-color: #ffebee; border-left: 4px solid #d32f2f; border-radius: 4px;",
-                                h3 { style: "margin-top: 0;", "❌ Error in {current_tab.name}" }
-                                pre {
-                                    style: "white-space: pre-wrap; word-wrap: break-word; font-family: monospace; margin-top: 12px;",
-                                    "{error}"
-                                }
-                            }
-                        } else if let Some(result) = current_tab.result {
-                            div {
-                                div {
-                                    style: "display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;",
-                                    div {
-                                        h2 {
-                                            style: "margin: 0; color: #1976d2;",
-                                            "📊 {current_tab.name} Results"
-                                        }
-                                        div {
-                                            style: "margin-top: 8px; color: #666; font-size: 0.9em;",
-                                            "{result.rows.len()} rows × {result.column_names.len()} columns"
-                                        }
-                                    }
-                                    div {
-                                        style: "display: flex; gap: 8px;",
-                                        {
-                                            let table_style = if current_view_mode == "table" {
-                                                "padding: 8px 16px; cursor: pointer; background-color: #1976d2; color: white; border: none; border-radius: 4px;"
-                                            } else {
-                                                "padding: 8px 16px; cursor: pointer; background-color: #e0e0e0; color: #333; border: none; border-radius: 4px;"
-                                            };
-                                            rsx! {
-                                                button {
-                                                    style: "{table_style}",
-                                                    onclick: move |_| view_mode.set("table"),
-                                                    "📋 Table"
-                                                }
-                                            }
-                                        }
-                                        {
-                                            let chart_style = if current_view_mode == "chart" {
-                                                "padding: 8px 16px; cursor: pointer; background-color: #1976d2; color: white; border: none; border-radius: 4px;"
-                                            } else {
-                                                "padding: 8px 16px; cursor: pointer; background-color: #e0e0e0; color: #333; border: none; border-radius: 4px;"
-                                            };
-                                            rsx! {
-                                                button {
-                                                    style: "{chart_style}",
-                                                    onclick: move |_| view_mode.set("chart"),
-                                                    disabled: !is_plotly_loaded,
-                                                    "📊 Chart"
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                
-                                // Chart type selector (only visible in chart mode)
-                                if current_view_mode == "chart" && is_plotly_loaded {
-                                    div {
-                                        style: "margin-bottom: 16px; padding: 12px; background-color: #f5f5f5; border-radius: 4px;",
-                                        div {
-                                            style: "margin-bottom: 8px; font-weight: bold; color: #555;",
-                                            "Chart Type:"
-                                        }
-                                        div {
-                                            style: "display: flex; gap: 12px; flex-wrap: wrap;",
-                                            
-                                            // Bar Chart
-                                            {
-                                                let bar_border = if current_chart_type == ChartType::Bar { "#1976d2" } else { "#ddd" };
-                                                let bar_style = format!("display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 6px 12px; background-color: white; border-radius: 4px; border: 2px solid {}; transition: all 0.2s;", bar_border);
-                                                rsx! {
-                                                    label {
-                                                        style: "{bar_style}",
-                                                        input {
-                                                            r#type: "radio",
-                                                            name: "chart-type",
-                                                            checked: current_chart_type == ChartType::Bar,
-                                                            onchange: move |_| chart_type.set(ChartType::Bar),
-                                                        }
-                                                        span { "{ChartType::Bar.icon()} {ChartType::Bar.label()}" }
-                                                    }
-                                                }
-                                            }
-                                            
-                                            // Line Chart
-                                            {
-                                                let line_border = if current_chart_type == ChartType::Line { "#1976d2" } else { "#ddd" };
-                                                let line_style = format!("display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 6px 12px; background-color: white; border-radius: 4px; border: 2px solid {}; transition: all 0.2s;", line_border);
-                                                rsx! {
-                                                    label {
-                                                        style: "{line_style}",
-                                                        input {
-                                                            r#type: "radio",
-                                                            name: "chart-type",
-                                                            checked: current_chart_type == ChartType::Line,
-                                                            onchange: move |_| chart_type.set(ChartType::Line),
-                                                        }
-                                                        span { "{ChartType::Line.icon()} {ChartType::Line.label()}" }
-                                                    }
-                                                }
-                                            }
-                                            
-                                            // Area Chart
-                                            {
-                                                let area_border = if current_chart_type == ChartType::Area { "#1976d2" } else { "#ddd" };
-                                                let area_style = format!("display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 6px 12px; background-color: white; border-radius: 4px; border: 2px solid {}; transition: all 0.2s;", area_border);
-                                                rsx! {
-                                                    label {
-                                                        style: "{area_style}",
-                                                        input {
-                                                            r#type: "radio",
-                                                            name: "chart-type",
-                                                            checked: current_chart_type == ChartType::Area,
-                                                            onchange: move |_| chart_type.set(ChartType::Area),
-                                                        }
-                                                        span { "{ChartType::Area.icon()} {ChartType::Area.label()}" }
-                                                    }
-                                                }
-                                            }
-                                            
-                                            // Scatter Plot
-                                            {
-                                                let scatter_border = if current_chart_type == ChartType::Scatter { "#1976d2" } else { "#ddd" };
-                                                let scatter_style = format!("display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 6px 12px; background-color: white; border-radius: 4px; border: 2px solid {}; transition: all 0.2s;", scatter_border);
-                                                rsx! {
-                                                    label {
-                                                        style: "{scatter_style}",
-                                                        input {
-                                                            r#type: "radio",
-                                                            name: "chart-type",
-                                                            checked: current_chart_type == ChartType::Scatter,
-                                                            onchange: move |_| chart_type.set(ChartType::Scatter),
-                                                        }
-                                                        span { "{ChartType::Scatter.icon()} {ChartType::Scatter.label()}" }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                
-                                hr { style: "margin: 16px 0; border: none; border-top: 1px solid #e0e0e0;" }
-                                
-                                if current_view_mode == "table" {
-                                    div {
-                                        style: "overflow: auto;",
-                                        ResultsTable { result: result.clone() }
-                                    }
-                                } else if is_plotly_loaded {
-                                    ChartView { 
-                                        result: result.clone(),
-                                        tab_index: *selected_tab.read(),
-                                        chart_type: current_chart_type
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-#[cfg(feature = "gui")]
-#[component]
-fn ChartView(result: QueryResult, tab_index: usize, chart_type: ChartType) -> Element {
-    let chart_id = use_signal(move || format!("chart-{}", tab_index));
-    let mut error_message = use_signal(|| None::<String>);
-    
-    use_effect(move || {
-        let result_clone = result.clone();
-        let chart_id_value = chart_id.read().clone();
-        
-        error_message.set(None);
-        
-        spawn(async move {
-            let wait_for_dom_js = format!(
-                r#"
-                (async function() {{
-                    for (let i = 0; i < 50; i++) {{
-                        const element = document.getElementById('{}');
-                        if (element) {{
-                            dioxus.send('READY');
-                            return;
-                        }}
-                        await new Promise(resolve => setTimeout(resolve, 50));
-                    }}
-                    dioxus.send('ERROR');
-                }})()
-                "#,
-                chart_id_value
-            );
-            
-            let mut dom_eval = document::eval(&wait_for_dom_js);
-            match dom_eval.recv::<String>().await {
-                Ok(status) if status == "READY" => {
-                    render_chart(result_clone, chart_id_value, chart_type, error_message);
-                },
-                _ => {
-                    error_message.set(Some("Failed to create chart container".to_string()));
-                }
-            }
-        });
-    });
-    
-    rsx! {
-        div {
-            style: "position: relative;",
-            
-            if let Some(error) = error_message.read().as_ref() {
-                div {
-                    style: "padding: 20px; background-color: #ffebee; border-left: 4px solid #d32f2f; border-radius: 4px; margin-bottom: 16px;",
-                    div {
-                        style: "font-weight: bold; color: #d32f2f; margin-bottom: 8px;",
-                        "❌ Chart Error"
-                    }
-                    pre {
-                        style: "white-space: pre-wrap; word-wrap: break-word; font-family: monospace; font-size: 0.9em; color: #666;",
-                        "{error}"
-                    }
-                }
-            }
-            
-            div {
-                id: "{chart_id}",
-                style: "width: 100%; height: 70vh; min-height: 500px; max-height: 900px; background-color: white; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);"
-            }
-        }
-    }
-}
-
-#[cfg(feature = "gui")]
-fn render_chart(
-    result: QueryResult,
-    chart_id: String,
+struct AppState {
+    tabs: Vec<QueryTab>,
+    selected_tab: usize,
+    view_mode: ViewMode,
     chart_type: ChartType,
-    mut error_message: Signal<Option<String>>,
-) {
-    let mut numeric_columns = Vec::new();
-    if !result.rows.is_empty() {
-        for (col_idx, col_name) in result.column_names.iter().enumerate() {
-            if let Some(first_row) = result.rows.first() {
-                if let Some(value) = first_row.get(col_idx) {
-                    if value != "NULL" && value.parse::<f64>().is_ok() {
-                        numeric_columns.push((col_idx, col_name.clone()));
+    x_axis_column: Option<String>,
+    y_axis_column: Option<String>,
+}
+
+#[cfg(feature = "gui")]
+impl AppState {
+    fn new(sql: String) -> Self {
+        let tabs = execute_queries(&sql);
+        
+        // Initialize with first available columns
+        let (x_col, y_col) = if let Some(first_tab) = tabs.first() {
+            if let Some(result) = &first_tab.result {
+                let x = result.column_names.first().cloned();
+                let y = result.column_names.get(1).or_else(|| result.column_names.first()).cloned();
+                (x, y)
+            } else {
+                (None, None)
+            }
+        } else {
+            (None, None)
+        };
+        
+        Self {
+            tabs,
+            selected_tab: 0,
+            view_mode: ViewMode::Table,
+            chart_type: ChartType::Bar,
+            x_axis_column: x_col,
+            y_axis_column: y_col,
+        }
+    }
+
+    fn update(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::TabSelected(index) => {
+                if index < self.tabs.len() {
+                    self.selected_tab = index;
+                    
+                    // Reset column selections when changing tabs
+                    if let Some(tab) = self.tabs.get(index) {
+                        if let Some(result) = &tab.result {
+                            self.x_axis_column = result.column_names.first().cloned();
+                            self.y_axis_column = result.column_names.get(1)
+                                .or_else(|| result.column_names.first())
+                                .cloned();
+                        }
+                    }
+                }
+            }
+            Message::ViewModeChanged(mode) => {
+                self.view_mode = mode;
+            }
+            Message::ChartTypeChanged(chart_type) => {
+                self.chart_type = chart_type;
+            }
+            Message::XAxisColumnChanged(col) => {
+                self.x_axis_column = Some(col);
+            }
+            Message::YAxisColumnChanged(col) => {
+                self.y_axis_column = Some(col);
+            }
+            Message::None => {}
+        }
+        Task::none()
+    }
+
+    fn view(&self) -> Element<Message> {
+        if self.tabs.is_empty() {
+            return container(text("⚠️ No queries to display").color(iced::Color::BLACK))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .into();
+        }
+
+        let mut content = column![].spacing(10).padding(20);
+
+        // Tab selector (if multiple tabs)
+        if self.tabs.len() > 1 {
+            let tab_buttons: Vec<Element<Message>> = self
+                .tabs
+                .iter()
+                .enumerate()
+                .map(|(idx, tab)| {
+                    let btn = button(text(&tab.name))
+                        .padding(10)
+                        .on_press(Message::TabSelected(idx));
+                    
+                    Element::from(btn)
+                })
+                .collect();
+
+            let tabs_row = row(tab_buttons).spacing(5);
+            content = content.push(tabs_row);
+        }
+
+        // Current tab content
+        if let Some(current_tab) = self.tabs.get(self.selected_tab) {
+            if let Some(error) = &current_tab.error {
+                let error_display = container(
+                    column![
+                        text(format!("❌ Error in {}", current_tab.name))
+                            .size(20)
+                            .color(iced::Color::BLACK),
+                        text(error).size(14).color(iced::Color::BLACK)
+                    ]
+                    .spacing(10)
+                )
+                .padding(20)
+                .style(|_theme: &Theme| {
+                    container::Style {
+                        background: Some(iced::Background::Color(iced::Color::from_rgb(1.0, 0.9, 0.9))),
+                        border: iced::Border {
+                            color: iced::Color::from_rgb(0.8, 0.2, 0.2),
+                            width: 2.0,
+                            radius: 4.0.into(),
+                        },
+                        ..Default::default()
+                    }
+                });
+
+                content = content.push(error_display);
+            } else if let Some(result) = &current_tab.result {
+                // Header with view mode selector
+                let header = row![
+                    column![
+                        text(format!("📊 {} Results", current_tab.name))
+                            .size(24)
+                            .color(iced::Color::BLACK),
+                        text(format!(
+                            "{} rows × {} columns",
+                            result.rows.len(),
+                            result.column_names.len()
+                        ))
+                        .size(14)
+                        .color(iced::Color::BLACK)
+                    ]
+                    .spacing(5),
+                    row![
+                        pick_list(
+                            ViewMode::all(),
+                            Some(self.view_mode.clone()),
+                            Message::ViewModeChanged
+                        )
+                        .padding(10),
+                    ]
+                    .spacing(10)
+                ]
+                .spacing(20)
+                .align_y(Alignment::Center);
+
+                content = content.push(header);
+
+                // Chart type selector (only in chart mode)
+                if self.view_mode == ViewMode::Chart {
+                    let chart_selector = row![
+                        text("Chart Type:").size(16).color(iced::Color::BLACK),
+                        pick_list(
+                            ChartType::all(),
+                            Some(self.chart_type),
+                            Message::ChartTypeChanged
+                        )
+                        .padding(10),
+                    ]
+                    .spacing(10)
+                    .align_y(Alignment::Center);
+
+                    content = content.push(chart_selector);
+                    
+                    // Column selection for chart axes
+                    let column_options: Vec<String> = result.column_names.clone();
+                    
+                    if !column_options.is_empty() {
+                        let axis_selector = row![
+                            text("X Axis:").size(14).color(iced::Color::BLACK),
+                            pick_list(
+                                column_options.clone(),
+                                self.x_axis_column.clone(),
+                                Message::XAxisColumnChanged
+                            )
+                            .padding(8),
+                            text("Y Axis:").size(14).color(iced::Color::BLACK),
+                            pick_list(
+                                column_options,
+                                self.y_axis_column.clone(),
+                                Message::YAxisColumnChanged
+                            )
+                            .padding(8),
+                        ]
+                        .spacing(15)
+                        .align_y(Alignment::Center);
+                        
+                        content = content.push(axis_selector);
+                    }
+                }
+
+                // Content based on view mode
+                match self.view_mode {
+                    ViewMode::Table => {
+                        let table_view = self.render_table(result);
+                        content = content.push(table_view);
+                    }
+                    ViewMode::Chart => {
+                        let chart_view = self.render_chart(result);
+                        content = content.push(chart_view);
                     }
                 }
             }
         }
+
+        scrollable(content).into()
     }
-    
-    let label_col_idx = result.column_names.iter().enumerate()
-        .find(|(idx, _)| !numeric_columns.iter().any(|(num_idx, _)| num_idx == idx))
-        .map(|(idx, _)| idx);
-    
-    if numeric_columns.is_empty() {
-        error_message.set(Some("No numeric columns found for charting".to_string()));
-        return;
+
+    fn theme(&self) -> Theme {
+        Theme::Light
     }
-    
-    let mut traces = Vec::new();
-    
-    for (col_idx, col_name) in numeric_columns.iter() {
-        let values: Vec<String> = result.rows.iter()
-            .filter_map(|row| {
-                row.get(*col_idx)
-                    .and_then(|v| {
-                        if v == "NULL" { None } else { Some(v.clone()) }
+
+    fn render_table<'a>(&self, result: &'a QueryResult) -> Element<'a, Message> {
+        let mut table_content = column![].spacing(0);
+
+        // Header row
+        let header_cells: Vec<Element<'a, Message>> = result
+            .column_names
+            .iter()
+            .map(|name| {
+                container(text(name).size(14).color(iced::Color::BLACK))
+                    .padding(10)
+                    .width(Length::Fill)
+                    .style(|_theme: &Theme| {
+                        container::Style {
+                            background: Some(iced::Background::Color(iced::Color::from_rgb(0.9, 0.9, 0.9))),
+                            border: iced::Border {
+                                color: iced::Color::from_rgb(0.7, 0.7, 0.7),
+                                width: 1.0,
+                                radius: 0.0.into(),
+                            },
+                            ..Default::default()
+                        }
                     })
+                    .into()
             })
             .collect();
-        
-        let col_name_escaped = col_name.replace('\\', "\\\\").replace('"', "\\\"");
-        
-        let x_data = if let Some(label_idx) = label_col_idx {
-            let labels: Vec<String> = result.rows.iter()
-                .filter_map(|row| row.get(label_idx).map(|s| {
-                    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
-                }))
+
+        let header_row = row(header_cells).spacing(0);
+        table_content = table_content.push(header_row);
+
+        // Data rows
+        for (idx, row_data) in result.rows.iter().enumerate() {
+            let cells: Vec<Element<'a, Message>> = row_data
+                .iter()
+                .map(|cell| {
+                    let bg_color = if idx % 2 == 0 {
+                        iced::Color::WHITE
+                    } else {
+                        iced::Color::from_rgb(0.98, 0.98, 0.98)
+                    };
+
+                    container(text(cell).size(14).color(iced::Color::BLACK))
+                        .padding(8)
+                        .width(Length::Fill)
+                        .style(move |_theme: &Theme| {
+                            container::Style {
+                                background: Some(iced::Background::Color(bg_color)),
+                                border: iced::Border {
+                                    color: iced::Color::from_rgb(0.85, 0.85, 0.85),
+                                    width: 1.0,
+                                    radius: 0.0.into(),
+                                },
+                                ..Default::default()
+                            }
+                        })
+                        .into()
+                })
                 .collect();
-            format!("[{}]", labels.join(", "))
-        } else {
-            let indices: Vec<String> = (0..result.rows.len())
-                .map(|i| format!("\"{}\"", i))
-                .collect();
-            format!("[{}]", indices.join(", "))
-        };
-        
-        let trace = match chart_type {
-            ChartType::Area => {
-                format!(
-                    r#"{{
-                        type: 'scatter',
-                        mode: 'lines',
-                        name: "{}",
-                        y: [{}],
-                        x: {},
-                        fill: 'tonexty',
-                        fillcolor: 'rgba(31, 119, 180, 0.3)'
-                    }}"#,
-                    col_name_escaped,
-                    values.join(", "),
-                    x_data
-                )
-            },
-            ChartType::Scatter => {
-                format!(
-                    r#"{{
-                        type: 'scatter',
-                        mode: 'markers',
-                        name: "{}",
-                        y: [{}],
-                        x: {},
-                        marker: {{ size: 10 }}
-                    }}"#,
-                    col_name_escaped,
-                    values.join(", "),
-                    x_data
-                )
-            },
-            ChartType::Line => {
-                format!(
-                    r#"{{
-                        type: 'scatter',
-                        mode: 'lines+markers',
-                        name: "{}",
-                        y: [{}],
-                        x: {}
-                    }}"#,
-                    col_name_escaped,
-                    values.join(", "),
-                    x_data
-                )
-            },
-            ChartType::Bar => {
-                format!(
-                    r#"{{
-                        type: 'bar',
-                        name: "{}",
-                        y: [{}],
-                        x: {}
-                    }}"#,
-                    col_name_escaped,
-                    values.join(", "),
-                    x_data
-                )
-            }
-        };
-        
-        traces.push(trace);
+
+            let data_row = row(cells).spacing(0);
+            table_content = table_content.push(data_row);
+        }
+
+        scrollable(table_content).into()
     }
-    
-    let x_axis_title = if let Some(label_idx) = label_col_idx {
-        result.column_names.get(label_idx)
-            .cloned()
-            .unwrap_or_else(|| "Index".to_string())
-            .replace('\\', "\\\\").replace('"', "\\\"")
-    } else {
-        "Index".to_string()
-    };
-    
-    let barmode = if chart_type == ChartType::Bar { "barmode: 'group'," } else { "" };
-    
-    spawn(async move {
-        let js_code = format!(
-            r#"
-            (async function() {{
-                try {{
-                    if (typeof Plotly === 'undefined') {{
-                        throw new Error('Plotly not loaded');
-                    }}
-                    
-                    const chartDiv = document.getElementById('{}');
-                    if (!chartDiv) {{
-                        throw new Error('Chart container not found');
-                    }}
-                    
-                    Plotly.purge(chartDiv);
-                    
-                    const data = [{}];
-                    const layout = {{
-                        title: 'Query Results - {} Chart',
-                        {}
-                        xaxis: {{ title: "{}" }},
-                        yaxis: {{ title: 'Value' }},
-                        plot_bgcolor: '#f9f9f9',
-                        paper_bgcolor: 'white',
-                        margin: {{ l: 60, r: 40, t: 60, b: 80 }}
-                    }};
-                    const config = {{
-                        responsive: true,
-                        displayModeBar: true,
-                        displaylogo: false
-                    }};
-                    
-                    await Plotly.newPlot('{}', data, layout, config);
-                    dioxus.send('SUCCESS');
-                }} catch (error) {{
-                    dioxus.send('ERROR: ' + error.message);
-                }}
-            }})()
-            "#,
-            chart_id,
-            traces.join(", "),
-            chart_type.label(),
-            barmode,
-            x_axis_title,
-            chart_id
-        );
+
+    fn render_chart<'a>(&self, result: &'a QueryResult) -> Element<'a, Message> {
+        // Create a simple bar chart visualization using canvas
+        let chart_canvas = canvas(ChartCanvas {
+            result: result.clone(),
+            chart_type: self.chart_type,
+            x_axis_column: self.x_axis_column.clone(),
+            y_axis_column: self.y_axis_column.clone(),
+        })
+        .width(Length::Fill)
+        .height(Length::Fixed(450.0));
+
+        let chart_info_text = if let (Some(x), Some(y)) = (&self.x_axis_column, &self.y_axis_column) {
+            format!("Plotting: X={}, Y={}", x, y)
+        } else {
+            "Select columns for X and Y axes".to_string()
+        };
+
+        let chart_container = column![
+            text(format!("Chart Type: {:?}", self.chart_type))
+                .size(16)
+                .color(iced::Color::BLACK),
+            text(chart_info_text)
+                .size(14)
+                .color(iced::Color::BLACK),
+            chart_canvas
+        ]
+        .spacing(10)
+        .padding(20);
+
+        container(chart_container)
+            .padding(20)
+            .width(Length::Fill)
+            .style(|_theme: &Theme| {
+                container::Style {
+                    background: Some(iced::Background::Color(iced::Color::from_rgb(0.85, 0.85, 0.85))),
+                    border: iced::Border {
+                        color: iced::Color::from_rgb(0.7, 0.7, 0.7),
+                        width: 1.0,
+                        radius: 4.0.into(),
+                    },
+                    ..Default::default()
+                }
+            })
+            .into()
+    }
+}
+
+#[cfg(feature = "gui")]
+#[derive(Clone)]
+struct ChartCanvas {
+    result: QueryResult,
+    chart_type: ChartType,
+    x_axis_column: Option<String>,
+    y_axis_column: Option<String>,
+}
+
+#[cfg(feature = "gui")]
+impl canvas::Program<Message> for ChartCanvas {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &iced::Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: iced::mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+
+        // Fill background with white
+        let background = canvas::Path::rectangle(Point::ORIGIN, bounds.size());
+        frame.fill(&background, Color::WHITE);
+
+        // Get column indices for selected axes
+        let x_col_idx = self.x_axis_column.as_ref().and_then(|col_name| {
+            self.result.column_names.iter().position(|c| c == col_name)
+        });
+
+        let y_col_idx = self.y_axis_column.as_ref().and_then(|col_name| {
+            self.result.column_names.iter().position(|c| c == col_name)
+        });
+
+        if x_col_idx.is_none() || y_col_idx.is_none() || self.result.rows.is_empty() {
+            return vec![frame.into_geometry()];
+        }
+
+        let x_idx = x_col_idx.unwrap();
+        let y_idx = y_col_idx.unwrap();
+
+        // Extract x values (can be text labels or numbers)
+        let x_labels: Vec<String> = self.result.rows
+            .iter()
+            .filter_map(|row| row.get(x_idx).cloned())
+            .collect();
+
+        // Extract y values (must be numeric)
+        let y_values: Vec<f64> = self.result.rows
+            .iter()
+            .filter_map(|row| {
+                row.get(y_idx)
+                    .and_then(|v| v.parse::<f64>().ok())
+            })
+            .collect();
+
+        if y_values.is_empty() || x_labels.is_empty() {
+            return vec![frame.into_geometry()];
+        }
+
+        let max_value = y_values.iter().fold(0.0f64, |a, &b| a.max(b));
+        let min_value = y_values.iter().fold(max_value, |a, &b| a.min(b));
+        let value_range = (max_value - min_value).max(1.0);
+
+        let y_label_width = if let Some(y_col) = &self.y_axis_column {
+            (y_col.len() as f32 * 8.0 + 20.0).max(70.0)
+        } else {
+            50.0
+        };
         
-        let mut eval = document::eval(&js_code);
+        let left_margin = y_label_width + 30.0;
+        let right_margin = 40.0;
+        let top_margin = 30.0;
+        let bottom_margin = 80.0;
         
-        if let Ok(result) = eval.recv::<String>().await {
-            if result.starts_with("ERROR") {
-                error_message.set(Some(format!("Chart rendering failed: {}", result)));
+        let chart_height = bounds.height - top_margin - bottom_margin;
+        let chart_width = bounds.width - left_margin - right_margin;
+        let bar_width = (chart_width / y_values.len() as f32).min(60.0);
+        let spacing = bar_width * 0.2;
+
+        // Draw grid lines
+        let num_horizontal_lines = 5;
+        for i in 0..=num_horizontal_lines {
+            let y = top_margin + (chart_height / num_horizontal_lines as f32) * i as f32;
+            let grid_line = canvas::Path::line(
+                Point::new(left_margin, y),
+                Point::new(chart_width + left_margin, y),
+            );
+            frame.stroke(
+                &grid_line,
+                canvas::Stroke::default()
+                    .with_color(Color::from_rgb(0.85, 0.85, 0.85))
+                    .with_width(1.0),
+            );
+        }
+
+        for i in 0..y_values.len() {
+            let x = left_margin + i as f32 * bar_width + bar_width / 2.0;
+            let grid_line = canvas::Path::line(
+                Point::new(x, top_margin),
+                Point::new(x, chart_height + top_margin),
+            );
+            frame.stroke(
+                &grid_line,
+                canvas::Stroke::default()
+                    .with_color(Color::from_rgb(0.9, 0.9, 0.9))
+                    .with_width(1.0),
+            );
+        }
+
+        match self.chart_type {
+            ChartType::Bar => {
+                for (i, &value) in y_values.iter().enumerate() {
+                    let normalized_height = ((value - min_value) / value_range) as f32 * chart_height;
+                    let x = left_margin + i as f32 * bar_width;
+                    let y = chart_height + top_margin - normalized_height;
+
+                    let bar = canvas::Path::rectangle(
+                        Point::new(x + spacing, y),
+                        Size::new(bar_width - spacing * 2.0, normalized_height),
+                    );
+                    frame.fill(&bar, Color::from_rgb(0.3, 0.6, 0.9));
+                }
+            }
+            ChartType::Line => {
+                let mut path_builder = canvas::path::Builder::new();
+                
+                for (i, &value) in y_values.iter().enumerate() {
+                    let normalized_height = ((value - min_value) / value_range) as f32 * chart_height;
+                    let x = left_margin + i as f32 * bar_width + bar_width / 2.0;
+                    let y = chart_height + top_margin - normalized_height;
+
+                    if i == 0 {
+                        path_builder.move_to(Point::new(x, y));
+                    } else {
+                        path_builder.line_to(Point::new(x, y));
+                    }
+
+                    let point = canvas::Path::circle(Point::new(x, y), 4.0);
+                    frame.fill(&point, Color::from_rgb(0.3, 0.6, 0.9));
+                }
+
+                let line_path = path_builder.build();
+                frame.stroke(
+                    &line_path,
+                    canvas::Stroke::default()
+                        .with_color(Color::from_rgb(0.3, 0.6, 0.9))
+                        .with_width(2.0),
+                );
+            }
+            ChartType::Area => {
+                let mut path_builder = canvas::path::Builder::new();
+                
+                let start_x = left_margin;
+                let baseline_y = chart_height + top_margin;
+                path_builder.move_to(Point::new(start_x, baseline_y));
+
+                if let Some(&first_value) = y_values.first() {
+                    let normalized_height = ((first_value - min_value) / value_range) as f32 * chart_height;
+                    let y = chart_height + top_margin - normalized_height;
+                    path_builder.line_to(Point::new(start_x, y));
+                }
+
+                for (i, &value) in y_values.iter().enumerate() {
+                    let normalized_height = ((value - min_value) / value_range) as f32 * chart_height;
+                    let x = left_margin + i as f32 * bar_width + bar_width / 2.0;
+                    let y = chart_height + top_margin - normalized_height;
+                    path_builder.line_to(Point::new(x, y));
+                }
+
+                let end_x = left_margin + (y_values.len() - 1) as f32 * bar_width + bar_width / 2.0;
+                path_builder.line_to(Point::new(end_x, baseline_y));
+                path_builder.line_to(Point::new(start_x, baseline_y));
+
+                let area_path = path_builder.build();
+                frame.fill(&area_path, Color::from_rgba(0.3, 0.6, 0.9, 0.3));
+                
+                let mut outline_builder = canvas::path::Builder::new();
+                for (i, &value) in y_values.iter().enumerate() {
+                    let normalized_height = ((value - min_value) / value_range) as f32 * chart_height;
+                    let x = left_margin + i as f32 * bar_width + bar_width / 2.0;
+                    let y = chart_height + top_margin - normalized_height;
+                    
+                    if i == 0 {
+                        outline_builder.move_to(Point::new(x, y));
+                    } else {
+                        outline_builder.line_to(Point::new(x, y));
+                    }
+                }
+                let outline_path = outline_builder.build();
+                frame.stroke(
+                    &outline_path,
+                    canvas::Stroke::default()
+                        .with_color(Color::from_rgb(0.3, 0.6, 0.9))
+                        .with_width(2.0),
+                );
+            }
+            ChartType::Scatter => {
+                for (i, &value) in y_values.iter().enumerate() {
+                    let normalized_height = ((value - min_value) / value_range) as f32 * chart_height;
+                    let x = left_margin + i as f32 * bar_width + bar_width / 2.0;
+                    let y = chart_height + top_margin - normalized_height;
+
+                    let point = canvas::Path::circle(Point::new(x, y), 5.0);
+                    frame.fill(&point, Color::from_rgb(0.3, 0.6, 0.9));
+                }
             }
         }
-    });
+
+        // Draw axes
+        let y_axis = canvas::Path::line(
+            Point::new(left_margin, top_margin),
+            Point::new(left_margin, chart_height + top_margin),
+        );
+        frame.stroke(
+            &y_axis,
+            canvas::Stroke::default()
+                .with_color(Color::BLACK)
+                .with_width(2.0),
+        );
+
+        let x_axis = canvas::Path::line(
+            Point::new(left_margin, chart_height + top_margin),
+            Point::new(chart_width + left_margin, chart_height + top_margin),
+        );
+        frame.stroke(
+            &x_axis,
+            canvas::Stroke::default()
+                .with_color(Color::BLACK)
+                .with_width(2.0),
+        );
+
+        // Y-axis ticks and labels
+        let num_y_ticks = 5;
+        for i in 0..=num_y_ticks {
+            let y = chart_height + top_margin - (chart_height / num_y_ticks as f32) * i as f32;
+            let value = min_value + (value_range / num_y_ticks as f64) * i as f64;
+            
+            let tick = canvas::Path::line(
+                Point::new(left_margin - 5.0, y),
+                Point::new(left_margin, y),
+            );
+            frame.stroke(
+                &tick,
+                canvas::Stroke::default()
+                    .with_color(Color::BLACK)
+                    .with_width(1.5),
+            );
+
+            frame.fill_text(canvas::Text {
+                content: format!("{:.1}", value),
+                position: Point::new(left_margin - 10.0, y - 7.0),
+                color: Color::BLACK,
+                size: 11.0.into(),
+                font: Font::default(),
+                horizontal_alignment: iced::alignment::Horizontal::Right,
+                vertical_alignment: iced::alignment::Vertical::Top,
+                ..canvas::Text::default()
+            });
+        }
+
+        // Y-axis title
+        if let Some(y_col) = &self.y_axis_column {
+            frame.fill_text(canvas::Text {
+                content: y_col.clone(),
+                position: Point::new(10.0, top_margin + chart_height / 2.0),
+                color: Color::BLACK,
+                size: 13.0.into(),
+                font: Font::default(),
+                horizontal_alignment: iced::alignment::Horizontal::Left,
+                vertical_alignment: iced::alignment::Vertical::Center,
+                ..canvas::Text::default()
+            });
+        }
+
+        // X-axis ticks and labels
+        for (i, label) in x_labels.iter().enumerate().take(y_values.len()) {
+            let x = left_margin + i as f32 * bar_width + bar_width / 2.0;
+            
+            let tick = canvas::Path::line(
+                Point::new(x, chart_height + top_margin),
+                Point::new(x, chart_height + top_margin + 5.0),
+            );
+            frame.stroke(
+                &tick,
+                canvas::Stroke::default()
+                    .with_color(Color::BLACK)
+                    .with_width(1.5),
+            );
+
+            let display_label = if label.len() > 8 {
+                format!("{}...", &label[..5])
+            } else {
+                label.clone()
+            };
+
+            frame.fill_text(canvas::Text {
+                content: display_label,
+                position: Point::new(x, chart_height + top_margin + 8.0),
+                color: Color::BLACK,
+                size: 10.0.into(),
+                font: Font::default(),
+                horizontal_alignment: iced::alignment::Horizontal::Center,
+                vertical_alignment: iced::alignment::Vertical::Top,
+                ..canvas::Text::default()
+            });
+        }
+
+        // X-axis title
+        if let Some(x_col) = &self.x_axis_column {
+            frame.fill_text(canvas::Text {
+                content: x_col.clone(),
+                position: Point::new(left_margin + chart_width / 2.0, chart_height + top_margin + 50.0),
+                color: Color::BLACK,
+                size: 14.0.into(),
+                font: Font::default(),
+                horizontal_alignment: iced::alignment::Horizontal::Center,
+                vertical_alignment: iced::alignment::Vertical::Top,
+                ..canvas::Text::default()
+            });
+        }
+
+        vec![frame.into_geometry()]
+    }
 }
 
 #[cfg(feature = "gui")]
@@ -980,51 +1007,54 @@ fn execute_queries(sql: &str) -> Vec<QueryTab> {
     tabs
 }
 
+/// Launch SQL2VIZ GUI with custom SQL query
+/// 
+/// # Example
+/// ```no_run
+/// use sql2viz::vizcreate;
+/// 
+/// let query = "SELECT * FROM users LIMIT 10";
+/// vizcreate(query.to_string()).unwrap();
+/// ```
 #[cfg(feature = "gui")]
-static SQL_STORAGE: std::sync::OnceLock<std::sync::Mutex<String>> = std::sync::OnceLock::new();
-
-/// Launch a simple GUI that only shows query results (requires "gui" feature)
-#[cfg(feature = "gui")]
-pub fn launch_simple_gui(sql: String) -> Result<()> {
+pub fn vizcreate(sql: String) -> Result<()> {
     if sql.trim().is_empty() {
         return Err(anyhow::anyhow!("No SQL query provided"));
     }
-    
-    if let Err(_) = SQL_STORAGE.set(std::sync::Mutex::new(sql.clone())) {
-        if let Some(storage) = SQL_STORAGE.get() {
-            if let Ok(mut guard) = storage.lock() {
-                *guard = sql;
-            }
-        }
-    }
-    
-    dioxus::launch(SimpleTableViewerApp);
-    Ok(())
+
+    let sql_arc = Arc::new(Mutex::new(sql));
+    let _ = SQL_STORAGE.set(sql_arc);
+
+    iced::application("SQL2VIZ - Query Viewer", AppState::update, AppState::view)
+        .theme(AppState::theme)
+        .run_with(|| {
+            let sql = SQL_STORAGE
+                .get()
+                .and_then(|storage| storage.lock().ok())
+                .map(|guard| guard.clone())
+                .unwrap_or_default();
+
+            (AppState::new(sql), Task::none())
+        })
+        .map_err(|e| anyhow::anyhow!("Failed to launch GUI: {}", e))
+}
+
+/// Launch SQL2VIZ GUI with an example query
+#[cfg(feature = "gui")]
+pub fn vizcreate_example() -> Result<()> {
+    let example = "SELECT 'Example' as name, 42 as value";
+    vizcreate(example.to_string())
+}
+
+// 後方互換性のため古い関数名も残す（非推奨）
+#[cfg(feature = "gui")]
+#[deprecated(since = "0.2.0", note = "Use `vizcreate` instead")]
+pub fn launch_simple_gui(sql: String) -> Result<()> {
+    vizcreate(sql)
 }
 
 #[cfg(feature = "gui")]
-#[component]
-fn SimpleTableViewerApp() -> Element {
-    let sql = SQL_STORAGE
-        .get()
-        .and_then(|storage| storage.lock().ok())
-        .map(|guard| guard.clone())
-        .unwrap_or_default();
-    
-    if sql.is_empty() {
-        return rsx! {
-            div {
-                style: "display: flex; justify-content: center; align-items: center; height: 100vh; color: #d32f2f; font-family: sans-serif;",
-                div {
-                    style: "text-align: center; padding: 32px; background-color: #ffebee; border-radius: 8px; border: 2px solid #d32f2f;",
-                    h1 { style: "margin-top: 0;", "⚠️ Initialization Error" }
-                    p { "SQL query was not properly initialized" }
-                }
-            }
-        };
-    }
-    
-    rsx! {
-        SimpleTableViewer { sql: sql }
-    }
+#[deprecated(since = "0.2.0", note = "Use `vizcreate_example` instead")]
+pub fn launch_gui() -> Result<()> {
+    vizcreate_example()
 }
