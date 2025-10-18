@@ -1,53 +1,31 @@
 [package]
-name = "flashchart"
+name = "sql2viz"
 version = "0.1.0"
 edition = "2021"
-authors = ["Your Name <your.email@example.com>"]
-description = "A Rust crate for executing DuckDB SQL queries and displaying results in beautiful tables"
+description = "Transform SQL queries into beautiful visualizations with DuckDB and Iced"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/yourusername/flashchart"
-keywords = ["duckdb", "sql", "table", "cli", "display"]
-categories = ["command-line-interface", "database"]
-
-# ← これを追加：クレートに含めるファイルを明示的に指定
-include = [
-    "src/**/*",
-    "assets/plotly-2.27.0.min.js",
-    "Cargo.toml",
-    "README.md",
-    "LICENSE-MIT",
-    "LICENSE-APACHE",
-]
+repository = "https://github.com/yourusername/sql2viz"
+keywords = ["duckdb", "visualization", "chart", "gui", "sql"]
+categories = ["visualization", "database", "gui"]
+readme = "README.md"
 
 [dependencies]
-duckdb = { version = "1.3", features = ["bundled", "chrono", "serde_json"] }
-tabled = { version = "0.20", optional = true }
-comfy-table = { version = "7.1", optional = true }
+# Core dependencies (always required)
 anyhow = "1.0"
+duckdb = { version = "1.4", features = ["bundled"] } 
 thiserror = "2.0"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-chrono = "0.4"
-clap = { version = "4.5", features = ["derive"], optional = true }
-colored = { version = "2.1", optional = true }
-csv = { version = "1.3", optional = true }
-arrow = { version = "54.0", optional = true }
-dioxus = { version = "0.6", features = ["desktop"], optional = true }
+
+# GUI dependencies (optional, enabled with "gui" feature)
+iced = { version = "0.13", features = ["canvas"], optional = true } 
+
 
 [features]
-default = ["tabled-backend", "colored"]
-tabled-backend = ["tabled"]
-comfy-backend = ["comfy-table"]
-all-backends = ["tabled-backend", "comfy-backend"]
-cli = ["clap"]
-gui = ["dioxus"]
-full = ["all-backends", "cli", "colored", "csv", "arrow", "gui"]
+default = []
+gui = ["iced"]
 
 [dev-dependencies]
+# For testing only
 tokio = { version = "1.42", features = ["full"] }
-criterion = "0.5"
-tempfile = "3.15"
-pretty_assertions = "1.4"
 
 [profile.release]
 lto = true
