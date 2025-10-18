@@ -27,6 +27,10 @@ fn main() {
 - Table view
 - Column selection for chart axes
 
+## crate.io
+
+https://crates.io/crates/sql2viz
+
 ## License
 
 MIT OR Apache-2.0
