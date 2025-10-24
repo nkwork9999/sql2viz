@@ -35,6 +35,20 @@ fn main() {
 }
 ```
 
+### Database File (DuckDB/SQLite)
+
+```rust
+use sql2viz::vizcreate;
+
+fn main() {
+    let query = "
+        ATTACH 'mydata.db' AS db;
+        SELECT * FROM db.sales;
+    ";
+    vizcreate(query.to_string()).unwrap();
+}
+```
+
 ## Features
 
 - SQL query execution with DuckDB
@@ -42,6 +56,7 @@ fn main() {
 - Table view
 - Column selection for chart axes
 - Direct CSV file reading
+- Database file connection (DuckDB, SQLite)
 
 ## crate.io
 
