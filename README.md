@@ -1,7 +1,6 @@
-````markdown
 # sql2viz
 
-Transform SQL queries into visualizations using DuckDB and Iced.
+Transform Raw SQL queries into visualizations using DuckDB and Iced.
 
 ## Installation
 
@@ -9,11 +8,8 @@ Transform SQL queries into visualizations using DuckDB and Iced.
 [dependencies]
 sql2viz = { version = "0.1", features = ["gui"] }
 ```
-````
 
 ## Usage
-
-### Basic Query
 
 ```rust
 use sql2viz::vizcreate;
@@ -24,30 +20,37 @@ fn main() {
 }
 ```
 
-### CSV File
+### Example with Database and CSV
 
 ```rust
 use sql2viz::vizcreate;
 
 fn main() {
-    let query = "SELECT * FROM read_csv_auto('data.csv')";
-    vizcreate(query.to_string()).unwrap();
+    let queries = "
+-- Connect to existing database
+ATTACH 'mydata.db' AS mydb;
+
+-- Query 1: Sales summary by category
+SELECT category, SUM(amount) as total_sales
+FROM mydb.sales
+GROUP BY category
+ORDER BY total_sales DESC;
+
+-- Query 2: Load CSV file
+SELECT * FROM 'test.csv' LIMIT 100;
+";
+
+    vizcreate(queries.to_string()).unwrap();
 }
 ```
 
-### Database File (DuckDB/SQLite)
+### Screenshots
 
-```rust
-use sql2viz::vizcreate;
+![Table View](./assets/table.png)
 
-fn main() {
-    let query = "
-        ATTACH 'mydata.db' AS db;
-        SELECT * FROM db.sales;
-    ";
-    vizcreate(query.to_string()).unwrap();
-}
-```
+![Chart View](./assets/charts.png)
+
+![Multiple Tabs](./assets/multiple.png)
 
 ## Features
 
@@ -55,17 +58,7 @@ fn main() {
 - Interactive charts (Bar, Line, Area, Scatter)
 - Table view
 - Column selection for chart axes
-- Direct CSV file reading
-- Database file connection (DuckDB, SQLite)
-
-## crate.io
-
-https://crates.io/crates/sql2viz
 
 ## License
 
 MIT OR Apache-2.0
-
-```
-
-```
