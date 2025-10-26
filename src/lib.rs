@@ -1058,3 +1058,5 @@ pub fn launch_simple_gui(sql: String) -> Result<()> {
 pub fn launch_gui() -> Result<()> {
     vizcreate_example()
 }
+
+mod python_bindings;
