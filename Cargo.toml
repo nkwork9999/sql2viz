@@ -9,11 +9,16 @@ keywords = ["duckdb", "visualization", "chart", "gui", "sql"]
 categories = ["visualization", "database", "gui"]
 readme = "README.md"
 
+[lib]
+name = "sql2viz"
+crate-type = ["cdylib", "rlib"]  # ← この2行を追加
+
 [dependencies]
 # Core dependencies (always required)
 anyhow = "1.0"
 duckdb = { version = "1.4", features = ["bundled"] } 
 thiserror = "2.0"
+pyo3 = { version = "0.22", features = ["extension-module"] }  # ← この行を追加
 
 # GUI dependencies (optional, enabled with "gui" feature)
 iced = { version = "0.13", features = ["canvas"], optional = true } 
