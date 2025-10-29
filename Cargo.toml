@@ -11,31 +11,67 @@ readme = "README.md"
 
 [lib]
 name = "sql2viz"
-crate-type = ["cdylib", "rlib"]  # ← この2行を追加
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# Core dependencies (always required)
+# Core dependencies
 anyhow = "1.0"
-duckdb = { version = "1.4", features = ["bundled"] } 
 thiserror = "2.0"
-pyo3 = { version = "0.22", features = ["extension-module"] }  # ← この行を追加
+
+# DuckDB (ネイティブのみ)
+duckdb = { version = "1.4", features = ["bundled"], optional = true }
+
+# Python bindings (optional, enabled with "python" feature)
+pyo3 = { version = "0.22", features = ["extension-module"], optional = true }
 
 # GUI dependencies (optional, enabled with "gui" feature)
-iced = { version = "0.13", features = ["canvas"], optional = true } 
+iced = { version = "0.13", features = ["canvas"], optional = true }
 
+# WASM dependencies (optional, enabled with "wasm" feature)
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+js-sys = { version = "0.3", optional = true }
+web-sys = { version = "0.3", features = [
+    "console",
+    "Window",
+    "Document",
+    "HtmlCanvasElement",
+], optional = true }
+serde = { version = "1.0", features = ["derive"], optional = true }
+serde-wasm-bindgen = { version = "0.6", optional = true }
+console_error_panic_hook = { version = "0.1", optional = true }
 
 [features]
-default = []
+default = ["duckdb", "gui"]
 gui = ["iced"]
+python = ["pyo3", "duckdb"]
+wasm = [
+    "wasm-bindgen",
+    "wasm-bindgen-futures",
+    "js-sys",
+    "web-sys",
+    "serde",
+    "serde-wasm-bindgen",
+    "iced",
+    "console_error_panic_hook",
+]
 
 [dev-dependencies]
-# For testing only
 tokio = { version = "1.42", features = ["full"] }
+wasm-bindgen-test = "0.3"
 
 [profile.release]
 lto = true
 codegen-units = 1
 opt-level = 3
 
+# WASM用の最適化プロファイル
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+
 [package.metadata.docs.rs]
 all-features = true
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-Oz", "--enable-mutable-globals"]
