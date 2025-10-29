@@ -1,59 +1,93 @@
+// src/lib.rs - SQL2VIZ完全版 (ネイティブ + WASM対応)
+// VizBuilder, ChartConfig, Python bindingsすべて含む
+
 use anyhow::Result;
-use duckdb::{params, Connection, Row};
 use thiserror::Error;
 
-/// Custom error types for the library
+// ============================================================================
+// エラー型定義
+// ============================================================================
+
 #[derive(Error, Debug)]
 pub enum DuckTableError {
     #[error("DuckDB error: {0}")]
-    DatabaseError(#[from] duckdb::Error),
+    DatabaseError(String),
 
     #[error("Table formatting error: {0}")]
     FormattingError(String),
 
     #[error("IO error: {0}")]
-    IoError(#[from] std::io::Error),
+    IoError(String),
 }
 
-/// Main struct for executing queries and displaying results
-pub struct DuckTable {
-    connection: Connection,
+// DuckDB Error からの変換（ネイティブのみ）
+#[cfg(all(not(target_arch = "wasm32"), feature = "duckdb"))]
+impl From<duckdb::Error> for DuckTableError {
+    fn from(err: duckdb::Error) -> Self {
+        DuckTableError::DatabaseError(err.to_string())
+    }
 }
 
-/// Result of a query execution
+// std::io::Error からの変換
+impl From<std::io::Error> for DuckTableError {
+    fn from(err: std::io::Error) -> Self {
+        DuckTableError::IoError(err.to_string())
+    }
+}
+
+// ============================================================================
+// 共通データ型
+// ============================================================================
+
+/// クエリ結果を保持する構造体
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "wasm", derive(serde::Serialize, serde::Deserialize))]
 pub struct QueryResult {
     pub column_names: Vec<String>,
     pub rows: Vec<Vec<String>>,
 }
 
+// ============================================================================
+// ネイティブ専用: DuckDB処理
+// ============================================================================
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "duckdb"))]
+use duckdb::{params, Connection, Row};
+
+/// DuckDB接続を保持する構造体（ネイティブ専用）
+#[cfg(all(not(target_arch = "wasm32"), feature = "duckdb"))]
+pub struct DuckTable {
+    connection: Connection,
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "duckdb"))]
 impl DuckTable {
-    /// Create a new DuckTable with an in-memory database
+    /// インメモリデータベースを作成
     pub fn new() -> Result<Self> {
         Ok(Self {
             connection: Connection::open_in_memory()?,
         })
     }
 
-    /// Create a new DuckTable with a file-based database
+    /// ファイルベースのデータベースを開く
     pub fn with_file(path: &str) -> Result<Self> {
         Ok(Self {
             connection: Connection::open(path)?,
         })
     }
 
-    /// Create with existing connection
+    /// 既存の接続を使用
     pub fn with_connection(connection: Connection) -> Self {
         Self { connection }
     }
 
-    /// Execute a SQL query and return formatted table as string
+    /// SQLクエリを実行して文字列結果を返す
     pub fn query(&self, sql: &str) -> Result<String> {
         let result = self.query_raw(sql)?;
         Ok(format!("Query returned {} rows", result.rows.len()))
     }
 
-    /// Execute a SQL query and return raw QueryResult
+    /// SQLクエリを実行してQueryResultを返す
     pub fn query_raw(&self, sql: &str) -> Result<QueryResult> {
         let mut stmt = self.connection.prepare(sql)?;
         let mut rows = stmt.query(params![])?;
@@ -99,7 +133,7 @@ impl DuckTable {
         })
     }
 
-    /// Extract value from a row safely
+    /// 行から値を安全に抽出
     fn extract_value_from_row(&self, row: &Row, index: usize) -> String {
         use duckdb::types::ValueRef;
 
@@ -166,7 +200,7 @@ impl DuckTable {
         }
     }
 
-    /// Execute multiple queries and display all results
+    /// 複数のクエリを実行
     pub fn query_multiple(&self, queries: &[&str]) -> Result<Vec<String>> {
         let mut results = Vec::new();
         for query in queries {
@@ -175,13 +209,13 @@ impl DuckTable {
         Ok(results)
     }
 
-    /// Get query execution plan
+    /// クエリ実行計画を取得
     pub fn explain(&self, sql: &str) -> Result<String> {
         let explain_sql = format!("EXPLAIN {}", sql);
         self.query(&explain_sql)
     }
 
-    /// Get query execution plan with analyze
+    /// クエリ実行計画を分析付きで取得
     pub fn explain_analyze(&self, sql: &str) -> Result<String> {
         let explain_sql = format!("EXPLAIN ANALYZE {}", sql);
         self.query(&explain_sql)
@@ -189,14 +223,102 @@ impl DuckTable {
 }
 
 // ============================================================================
-// GUI Components (enabled with "gui" feature) - Iced Implementation
+// WASM専用: JavaScript連携
+// ============================================================================
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+use wasm_bindgen::prelude::*;
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+use serde::{Deserialize, Serialize};
+
+/// WASM用のQueryResult（JavaScriptから呼び出し可能）
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+#[wasm_bindgen]
+#[derive(Serialize, Deserialize)]
+pub struct WasmQueryResult {
+    column_names: Vec<String>,
+    rows: Vec<Vec<String>>,
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+#[wasm_bindgen]
+impl WasmQueryResult {
+    /// コンストラクタ
+    #[wasm_bindgen(constructor)]
+    pub fn new(column_names: Vec<String>, rows: Vec<Vec<String>>) -> Self {
+        Self { column_names, rows }
+    }
+
+    /// カラム名を取得
+    #[wasm_bindgen(getter)]
+    pub fn column_names(&self) -> Vec<String> {
+        self.column_names.clone()
+    }
+
+    /// 行データを取得
+    #[wasm_bindgen(getter)]
+    pub fn rows(&self) -> JsValue {
+        serde_wasm_bindgen::to_value(&self.rows).unwrap_or(JsValue::NULL)
+    }
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+impl From<WasmQueryResult> for QueryResult {
+    fn from(wasm_result: WasmQueryResult) -> Self {
+        QueryResult {
+            column_names: wasm_result.column_names,
+            rows: wasm_result.rows,
+        }
+    }
+}
+
+/// WASM初期化
+#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+#[wasm_bindgen(start)]
+pub fn wasm_main() {
+    // パニック時のスタックトレース表示を改善
+    #[cfg(feature = "console_error_panic_hook")]
+    console_error_panic_hook::set_once();
+    
+    // ブラウザコンソールにログ出力
+    web_sys::console::log_1(&"SQL2VIZ WASM initialized".into());
+}
+
+/// JavaScriptからクエリ結果を受け取ってGUIを起動（WASM専用）
+#[cfg(all(target_arch = "wasm32", feature = "wasm", feature = "gui"))]
+#[wasm_bindgen]
+pub fn vizcreate_wasm(query_result: WasmQueryResult) -> Result<(), JsValue> {
+    let result: QueryResult = query_result.into();
+    
+    let tabs = vec![QueryTab {
+        name: "Query Result".to_string(),
+        result: Some(result.clone()),
+        error: None,
+        view_mode: ViewMode::Table,
+        chart_type: ChartType::Bar,
+        x_axis_column: result.column_names.first().cloned(),
+        y_axis_column: result.column_names.get(1).or_else(|| result.column_names.first()).cloned(),
+    }];
+
+    let app_state = AppState::with_tabs(tabs);
+
+    iced::application("SQL2VIZ - WASM", AppState::update, AppState::view)
+        .theme(AppState::theme)
+        .run_with(move || (app_state.clone(), iced::Task::none()))
+        .map_err(|e| JsValue::from_str(&format!("Failed to run app: {:?}", e)))
+}
+
+// ============================================================================
+// GUI Components (Iced Implementation) - ネイティブ & WASM共通
 // ============================================================================
 
 #[cfg(feature = "gui")]
-use iced::widget::{button, column, container, pick_list, row, scrollable, text, canvas};
+use iced::widget::{button, canvas, column, container, pick_list, row, scrollable, text};
 
 #[cfg(feature = "gui")]
-use iced::{Alignment, Element, Length, Task, Theme, Color, Point, Rectangle, Size, Font};
+use iced::{Alignment, Color, Element, Font, Length, Point, Rectangle, Size, Task, Theme};
+
 #[cfg(feature = "gui")]
 use std::sync::{Arc, Mutex};
 
@@ -249,7 +371,7 @@ pub enum ChartType {
 
 #[cfg(feature = "gui")]
 impl ChartType {
-    fn all() -> Vec<ChartType> {
+    pub fn all() -> Vec<ChartType> {
         vec![
             ChartType::Bar,
             ChartType::Line,
@@ -277,83 +399,81 @@ pub struct QueryTab {
     pub name: String,
     pub result: Option<QueryResult>,
     pub error: Option<String>,
+    pub view_mode: ViewMode,
+    pub chart_type: ChartType,
+    pub x_axis_column: Option<String>,
+    pub y_axis_column: Option<String>,
 }
 
 #[cfg(feature = "gui")]
-struct AppState {
-    tabs: Vec<QueryTab>,
-    selected_tab: usize,
-    view_mode: ViewMode,
-    chart_type: ChartType,
-    x_axis_column: Option<String>,
-    y_axis_column: Option<String>,
+#[derive(Clone)]
+pub struct AppState {
+    pub tabs: Vec<QueryTab>,
+    pub selected_tab: usize,
 }
 
 #[cfg(feature = "gui")]
 impl AppState {
-    fn new(sql: String) -> Self {
-        let tabs = execute_queries(&sql);
+    pub fn new(sql: String) -> Self {
+        #[cfg(all(not(target_arch = "wasm32"), feature = "duckdb"))]
+        let tabs = execute_queries_with_configs(&sql);
         
-        // Initialize with first available columns
-        let (x_col, y_col) = if let Some(first_tab) = tabs.first() {
-            if let Some(result) = &first_tab.result {
-                let x = result.column_names.first().cloned();
-                let y = result.column_names.get(1).or_else(|| result.column_names.first()).cloned();
-                (x, y)
-            } else {
-                (None, None)
-            }
-        } else {
-            (None, None)
-        };
+        #[cfg(any(target_arch = "wasm32", not(feature = "duckdb")))]
+        let tabs = vec![QueryTab {
+            name: "Error".to_string(),
+            result: None,
+            error: Some("DuckDB not available in WASM. Use vizcreate_wasm() instead.".to_string()),
+            view_mode: ViewMode::Table,
+            chart_type: ChartType::Bar,
+            x_axis_column: None,
+            y_axis_column: None,
+        }];
         
+        Self::with_tabs(tabs)
+    }
+    
+    pub fn with_tabs(tabs: Vec<QueryTab>) -> Self {
         Self {
             tabs,
             selected_tab: 0,
-            view_mode: ViewMode::Table,
-            chart_type: ChartType::Bar,
-            x_axis_column: x_col,
-            y_axis_column: y_col,
         }
     }
 
-    fn update(&mut self, message: Message) -> Task<Message> {
+    pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::TabSelected(index) => {
                 if index < self.tabs.len() {
                     self.selected_tab = index;
-                    
-                    // Reset column selections when changing tabs
-                    if let Some(tab) = self.tabs.get(index) {
-                        if let Some(result) = &tab.result {
-                            self.x_axis_column = result.column_names.first().cloned();
-                            self.y_axis_column = result.column_names.get(1)
-                                .or_else(|| result.column_names.first())
-                                .cloned();
-                        }
-                    }
                 }
             }
             Message::ViewModeChanged(mode) => {
-                self.view_mode = mode;
+                if let Some(tab) = self.tabs.get_mut(self.selected_tab) {
+                    tab.view_mode = mode;
+                }
             }
             Message::ChartTypeChanged(chart_type) => {
-                self.chart_type = chart_type;
+                if let Some(tab) = self.tabs.get_mut(self.selected_tab) {
+                    tab.chart_type = chart_type;
+                }
             }
             Message::XAxisColumnChanged(col) => {
-                self.x_axis_column = Some(col);
+                if let Some(tab) = self.tabs.get_mut(self.selected_tab) {
+                    tab.x_axis_column = Some(col);
+                }
             }
             Message::YAxisColumnChanged(col) => {
-                self.y_axis_column = Some(col);
+                if let Some(tab) = self.tabs.get_mut(self.selected_tab) {
+                    tab.y_axis_column = Some(col);
+                }
             }
             Message::None => {}
         }
         Task::none()
     }
 
-    fn view(&self) -> Element<Message> {
+    pub fn view(&self) -> Element<Message> {
         if self.tabs.is_empty() {
-            return container(text("⚠️ No queries to display").color(iced::Color::BLACK))
+            return container(text("⚠️ No queries to display").color(Color::BLACK))
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .center_x(Length::Fill)
@@ -389,17 +509,17 @@ impl AppState {
                     column![
                         text(format!("❌ Error in {}", current_tab.name))
                             .size(20)
-                            .color(iced::Color::BLACK),
-                        text(error).size(14).color(iced::Color::BLACK)
+                            .color(Color::BLACK),
+                        text(error).size(14).color(Color::BLACK)
                     ]
                     .spacing(10)
                 )
                 .padding(20)
                 .style(|_theme: &Theme| {
                     container::Style {
-                        background: Some(iced::Background::Color(iced::Color::from_rgb(1.0, 0.9, 0.9))),
+                        background: Some(iced::Background::Color(Color::from_rgb(1.0, 0.9, 0.9))),
                         border: iced::Border {
-                            color: iced::Color::from_rgb(0.8, 0.2, 0.2),
+                            color: Color::from_rgb(0.8, 0.2, 0.2),
                             width: 2.0,
                             radius: 4.0.into(),
                         },
@@ -414,20 +534,20 @@ impl AppState {
                     column![
                         text(format!("📊 {} Results", current_tab.name))
                             .size(24)
-                            .color(iced::Color::BLACK),
+                            .color(Color::BLACK),
                         text(format!(
                             "{} rows × {} columns",
                             result.rows.len(),
                             result.column_names.len()
                         ))
                         .size(14)
-                        .color(iced::Color::BLACK)
+                        .color(Color::BLACK)
                     ]
                     .spacing(5),
                     row![
                         pick_list(
                             ViewMode::all(),
-                            Some(self.view_mode.clone()),
+                            Some(current_tab.view_mode.clone()),
                             Message::ViewModeChanged
                         )
                         .padding(10),
@@ -440,12 +560,12 @@ impl AppState {
                 content = content.push(header);
 
                 // Chart type selector (only in chart mode)
-                if self.view_mode == ViewMode::Chart {
+                if current_tab.view_mode == ViewMode::Chart {
                     let chart_selector = row![
-                        text("Chart Type:").size(16).color(iced::Color::BLACK),
+                        text("Chart Type:").size(16).color(Color::BLACK),
                         pick_list(
                             ChartType::all(),
-                            Some(self.chart_type),
+                            Some(current_tab.chart_type),
                             Message::ChartTypeChanged
                         )
                         .padding(10),
@@ -460,17 +580,17 @@ impl AppState {
                     
                     if !column_options.is_empty() {
                         let axis_selector = row![
-                            text("X Axis:").size(14).color(iced::Color::BLACK),
+                            text("X Axis:").size(14).color(Color::BLACK),
                             pick_list(
                                 column_options.clone(),
-                                self.x_axis_column.clone(),
+                                current_tab.x_axis_column.clone(),
                                 Message::XAxisColumnChanged
                             )
                             .padding(8),
-                            text("Y Axis:").size(14).color(iced::Color::BLACK),
+                            text("Y Axis:").size(14).color(Color::BLACK),
                             pick_list(
                                 column_options,
-                                self.y_axis_column.clone(),
+                                current_tab.y_axis_column.clone(),
                                 Message::YAxisColumnChanged
                             )
                             .padding(8),
@@ -483,13 +603,13 @@ impl AppState {
                 }
 
                 // Content based on view mode
-                match self.view_mode {
+                match current_tab.view_mode {
                     ViewMode::Table => {
-                        let table_view = self.render_table(result);
+                        let table_view = Self::render_table(result);
                         content = content.push(table_view);
                     }
                     ViewMode::Chart => {
-                        let chart_view = self.render_chart(result);
+                        let chart_view = Self::render_chart(current_tab, result);
                         content = content.push(chart_view);
                     }
                 }
@@ -503,7 +623,7 @@ impl AppState {
         Theme::Light
     }
 
-    fn render_table<'a>(&self, result: &'a QueryResult) -> Element<'a, Message> {
+    fn render_table<'a>(result: &'a QueryResult) -> Element<'a, Message> {
         let mut table_content = column![].spacing(0);
 
         // Header row
@@ -511,14 +631,14 @@ impl AppState {
             .column_names
             .iter()
             .map(|name| {
-                container(text(name).size(14).color(iced::Color::BLACK))
+                container(text(name).size(14).color(Color::BLACK))
                     .padding(10)
                     .width(Length::Fill)
                     .style(|_theme: &Theme| {
                         container::Style {
-                            background: Some(iced::Background::Color(iced::Color::from_rgb(0.9, 0.9, 0.9))),
+                            background: Some(iced::Background::Color(Color::from_rgb(0.9, 0.9, 0.9))),
                             border: iced::Border {
-                                color: iced::Color::from_rgb(0.7, 0.7, 0.7),
+                                color: Color::from_rgb(0.7, 0.7, 0.7),
                                 width: 1.0,
                                 radius: 0.0.into(),
                             },
@@ -538,19 +658,19 @@ impl AppState {
                 .iter()
                 .map(|cell| {
                     let bg_color = if idx % 2 == 0 {
-                        iced::Color::WHITE
+                        Color::WHITE
                     } else {
-                        iced::Color::from_rgb(0.98, 0.98, 0.98)
+                        Color::from_rgb(0.98, 0.98, 0.98)
                     };
 
-                    container(text(cell).size(14).color(iced::Color::BLACK))
+                    container(text(cell).size(14).color(Color::BLACK))
                         .padding(8)
                         .width(Length::Fill)
                         .style(move |_theme: &Theme| {
                             container::Style {
                                 background: Some(iced::Background::Color(bg_color)),
                                 border: iced::Border {
-                                    color: iced::Color::from_rgb(0.85, 0.85, 0.85),
+                                    color: Color::from_rgb(0.85, 0.85, 0.85),
                                     width: 1.0,
                                     radius: 0.0.into(),
                                 },
@@ -568,30 +688,29 @@ impl AppState {
         scrollable(table_content).into()
     }
 
-    fn render_chart<'a>(&self, result: &'a QueryResult) -> Element<'a, Message> {
-        // Create a simple bar chart visualization using canvas
+    fn render_chart<'a>(current_tab: &'a QueryTab, result: &'a QueryResult) -> Element<'a, Message> {
         let chart_canvas = canvas(ChartCanvas {
             result: result.clone(),
-            chart_type: self.chart_type,
-            x_axis_column: self.x_axis_column.clone(),
-            y_axis_column: self.y_axis_column.clone(),
+            chart_type: current_tab.chart_type,
+            x_axis_column: current_tab.x_axis_column.clone(),
+            y_axis_column: current_tab.y_axis_column.clone(),
         })
         .width(Length::Fill)
         .height(Length::Fixed(450.0));
 
-        let chart_info_text = if let (Some(x), Some(y)) = (&self.x_axis_column, &self.y_axis_column) {
+        let chart_info_text = if let (Some(x), Some(y)) = (&current_tab.x_axis_column, &current_tab.y_axis_column) {
             format!("Plotting: X={}, Y={}", x, y)
         } else {
             "Select columns for X and Y axes".to_string()
         };
 
         let chart_container = column![
-            text(format!("Chart Type: {:?}", self.chart_type))
+            text(format!("Chart Type: {:?}", current_tab.chart_type))
                 .size(16)
-                .color(iced::Color::BLACK),
+                .color(Color::BLACK),
             text(chart_info_text)
                 .size(14)
-                .color(iced::Color::BLACK),
+                .color(Color::BLACK),
             chart_canvas
         ]
         .spacing(10)
@@ -602,9 +721,9 @@ impl AppState {
             .width(Length::Fill)
             .style(|_theme: &Theme| {
                 container::Style {
-                    background: Some(iced::Background::Color(iced::Color::from_rgb(0.85, 0.85, 0.85))),
+                    background: Some(iced::Background::Color(Color::from_rgb(0.95, 0.95, 0.95))),
                     border: iced::Border {
-                        color: iced::Color::from_rgb(0.7, 0.7, 0.7),
+                        color: Color::from_rgb(0.7, 0.7, 0.7),
                         width: 1.0,
                         radius: 4.0.into(),
                     },
@@ -638,11 +757,11 @@ impl canvas::Program<Message> for ChartCanvas {
     ) -> Vec<canvas::Geometry> {
         let mut frame = canvas::Frame::new(renderer, bounds.size());
 
-        // Fill background with white
+        // Fill background
         let background = canvas::Path::rectangle(Point::ORIGIN, bounds.size());
         frame.fill(&background, Color::WHITE);
 
-        // Get column indices for selected axes
+        // Get column indices
         let x_col_idx = self.x_axis_column.as_ref().and_then(|col_name| {
             self.result.column_names.iter().position(|c| c == col_name)
         });
@@ -658,18 +777,16 @@ impl canvas::Program<Message> for ChartCanvas {
         let x_idx = x_col_idx.unwrap();
         let y_idx = y_col_idx.unwrap();
 
-        // Extract x values (can be text labels or numbers)
+        // Extract values
         let x_labels: Vec<String> = self.result.rows
             .iter()
             .filter_map(|row| row.get(x_idx).cloned())
             .collect();
 
-        // Extract y values (must be numeric)
         let y_values: Vec<f64> = self.result.rows
             .iter()
             .filter_map(|row| {
-                row.get(y_idx)
-                    .and_then(|v| v.parse::<f64>().ok())
+                row.get(y_idx).and_then(|v| v.parse::<f64>().ok())
             })
             .collect();
 
@@ -697,7 +814,7 @@ impl canvas::Program<Message> for ChartCanvas {
         let bar_width = (chart_width / y_values.len() as f32).min(60.0);
         let spacing = bar_width * 0.2;
 
-        // Draw grid lines
+        // Draw grid
         let num_horizontal_lines = 5;
         for i in 0..=num_horizontal_lines {
             let y = top_margin + (chart_height / num_horizontal_lines as f32) * i as f32;
@@ -713,20 +830,7 @@ impl canvas::Program<Message> for ChartCanvas {
             );
         }
 
-        for i in 0..y_values.len() {
-            let x = left_margin + i as f32 * bar_width + bar_width / 2.0;
-            let grid_line = canvas::Path::line(
-                Point::new(x, top_margin),
-                Point::new(x, chart_height + top_margin),
-            );
-            frame.stroke(
-                &grid_line,
-                canvas::Stroke::default()
-                    .with_color(Color::from_rgb(0.9, 0.9, 0.9))
-                    .with_width(1.0),
-            );
-        }
-
+        // Draw chart
         match self.chart_type {
             ChartType::Bar => {
                 for (i, &value) in y_values.iter().enumerate() {
@@ -849,7 +953,7 @@ impl canvas::Program<Message> for ChartCanvas {
                 .with_width(2.0),
         );
 
-        // Y-axis ticks and labels
+        // Y-axis labels
         let num_y_ticks = 5;
         for i in 0..=num_y_ticks {
             let y = chart_height + top_margin - (chart_height / num_y_ticks as f32) * i as f32;
@@ -892,7 +996,7 @@ impl canvas::Program<Message> for ChartCanvas {
             });
         }
 
-        // X-axis ticks and labels
+        // X-axis labels
         for (i, label) in x_labels.iter().enumerate().take(y_values.len()) {
             let x = left_margin + i as f32 * bar_width + bar_width / 2.0;
             
@@ -943,8 +1047,104 @@ impl canvas::Program<Message> for ChartCanvas {
     }
 }
 
+// ============================================================================
+// VizBuilder and ChartConfig
+// ============================================================================
+
 #[cfg(feature = "gui")]
-fn execute_queries(sql: &str) -> Vec<QueryTab> {
+#[derive(Debug, Clone)]
+pub struct ChartConfig {
+    pub chart_type: Option<ChartType>,
+    pub x_axis_column: Option<String>,
+    pub y_axis_column: Option<String>,
+}
+
+#[cfg(feature = "gui")]
+impl Default for ChartConfig {
+    fn default() -> Self {
+        Self {
+            chart_type: None,
+            x_axis_column: None,
+            y_axis_column: None,
+        }
+    }
+}
+
+#[cfg(feature = "gui")]
+static CONFIGS_STORAGE: std::sync::OnceLock<Arc<Mutex<Vec<ChartConfig>>>> = std::sync::OnceLock::new();
+
+#[cfg(feature = "gui")]
+#[derive(Clone)]
+pub struct VizBuilder {
+    queries: Vec<String>,
+    configs: Vec<ChartConfig>,
+}
+
+#[cfg(feature = "gui")]
+impl VizBuilder {
+    pub fn new() -> Self {
+        Self {
+            queries: Vec::new(),
+            configs: Vec::new(),
+        }
+    }
+
+    pub fn add_query(mut self, sql: &str) -> Self {
+        let split_queries: Vec<&str> = sql
+            .split(';')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        for query in split_queries {
+            self.queries.push(query.to_string());
+            self.configs.push(ChartConfig::default());
+        }
+        self
+    }
+
+    pub fn with_chart(mut self, chart_type: ChartType, x_column: &str, y_column: &str) -> Self {
+        if let Some(last_config) = self.configs.last_mut() {
+            *last_config = ChartConfig {
+                chart_type: Some(chart_type),
+                x_axis_column: Some(x_column.to_string()),
+                y_axis_column: Some(y_column.to_string()),
+            };
+        }
+        self
+    }
+
+    pub fn launch(self) -> Result<()> {
+        if self.queries.is_empty() {
+            return Err(anyhow::anyhow!("No queries provided"));
+        }
+
+        let combined_sql = self.queries.join("; ");
+        let configs_arc = Arc::new(Mutex::new(self.configs));
+        let _ = CONFIGS_STORAGE.set(configs_arc);
+        let sql_arc = Arc::new(Mutex::new(combined_sql));
+        let _ = SQL_STORAGE.set(sql_arc);
+
+        iced::application("SQL2VIZ - Query Viewer", AppState::update, AppState::view)
+            .theme(AppState::theme)
+            .run_with(|| {
+                let sql = SQL_STORAGE
+                    .get()
+                    .and_then(|storage| storage.lock().ok())
+                    .map(|guard| guard.clone())
+                    .unwrap_or_default();
+                (AppState::new(sql), Task::none())
+            })
+            .map_err(|e| anyhow::anyhow!("Failed to launch GUI: {}", e))
+    }
+}
+
+// ============================================================================
+// ネイティブ専用: クエリ実行ヘルパー
+// ============================================================================
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "duckdb", feature = "gui"))]
+fn execute_queries_with_configs(sql: &str) -> Vec<QueryTab> {
     let mut tabs = Vec::new();
 
     if sql.trim().is_empty() {
@@ -952,6 +1152,10 @@ fn execute_queries(sql: &str) -> Vec<QueryTab> {
             name: "Error".to_string(),
             result: None,
             error: Some("No query provided".to_string()),
+            view_mode: ViewMode::Table,
+            chart_type: ChartType::Bar,
+            x_axis_column: None,
+            y_axis_column: None,
         });
         return tabs;
     }
@@ -963,6 +1167,10 @@ fn execute_queries(sql: &str) -> Vec<QueryTab> {
                 name: "Error".to_string(),
                 result: None,
                 error: Some(format!("Failed to create DuckTable: {}", e)),
+                view_mode: ViewMode::Table,
+                chart_type: ChartType::Bar,
+                x_axis_column: None,
+                y_axis_column: None,
             });
             return tabs;
         }
@@ -979,19 +1187,50 @@ fn execute_queries(sql: &str) -> Vec<QueryTab> {
             name: "Error".to_string(),
             result: None,
             error: Some("No valid queries found".to_string()),
+            view_mode: ViewMode::Table,
+            chart_type: ChartType::Bar,
+            x_axis_column: None,
+            y_axis_column: None,
         });
         return tabs;
     }
 
+    // 保存された設定を取得
+    let configs = CONFIGS_STORAGE
+        .get()
+        .and_then(|storage| storage.lock().ok())
+        .map(|guard| guard.clone())
+        .unwrap_or_default();
+
     for (idx, query) in queries.iter().enumerate() {
         let tab_name = format!("Query {}", idx + 1);
+        
+        // 対応する設定を取得（なければデフォルト）
+        let config = configs.get(idx).cloned().unwrap_or_default();
 
         match duck_table.query_raw(query) {
             Ok(result) => {
+                // チャート設定がある場合は自動的にChartモードに
+                let view_mode = if config.chart_type.is_some() {
+                    ViewMode::Chart
+                } else {
+                    ViewMode::Table
+                };
+
+                // X軸・Y軸の初期値を設定
+                let x_col = config.x_axis_column.or_else(|| result.column_names.first().cloned());
+                let y_col = config.y_axis_column.or_else(|| {
+                    result.column_names.get(1).or_else(|| result.column_names.first()).cloned()
+                });
+
                 tabs.push(QueryTab {
                     name: tab_name,
                     result: Some(result),
                     error: None,
+                    view_mode,
+                    chart_type: config.chart_type.unwrap_or(ChartType::Bar),
+                    x_axis_column: x_col,
+                    y_axis_column: y_col,
                 });
             }
             Err(e) => {
@@ -999,6 +1238,10 @@ fn execute_queries(sql: &str) -> Vec<QueryTab> {
                     name: tab_name,
                     result: None,
                     error: Some(e.to_string()),
+                    view_mode: ViewMode::Table,
+                    chart_type: ChartType::Bar,
+                    x_axis_column: None,
+                    y_axis_column: None,
                 });
             }
         }
@@ -1007,16 +1250,12 @@ fn execute_queries(sql: &str) -> Vec<QueryTab> {
     tabs
 }
 
-/// Launch SQL2VIZ GUI with custom SQL query
-/// 
-/// # Example
-/// ```no_run
-/// use sql2viz::vizcreate;
-/// 
-/// let query = "SELECT * FROM users LIMIT 10";
-/// vizcreate(query.to_string()).unwrap();
-/// ```
-#[cfg(feature = "gui")]
+// ============================================================================
+// ネイティブ専用: 公開API
+// ============================================================================
+
+/// Launch SQL2VIZ GUI with custom SQL query (ネイティブ専用)
+#[cfg(all(not(target_arch = "wasm32"), feature = "gui", feature = "duckdb"))]
 pub fn vizcreate(sql: String) -> Result<()> {
     if sql.trim().is_empty() {
         return Err(anyhow::anyhow!("No SQL query provided"));
@@ -1039,24 +1278,29 @@ pub fn vizcreate(sql: String) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to launch GUI: {}", e))
 }
 
-/// Launch SQL2VIZ GUI with an example query
-#[cfg(feature = "gui")]
+/// Launch SQL2VIZ GUI with an example query (ネイティブ専用)
+#[cfg(all(not(target_arch = "wasm32"), feature = "gui", feature = "duckdb"))]
 pub fn vizcreate_example() -> Result<()> {
     let example = "SELECT 'Example' as name, 42 as value";
     vizcreate(example.to_string())
 }
 
 // 後方互換性のため古い関数名も残す（非推奨）
-#[cfg(feature = "gui")]
+#[cfg(all(not(target_arch = "wasm32"), feature = "gui", feature = "duckdb"))]
 #[deprecated(since = "0.2.0", note = "Use `vizcreate` instead")]
 pub fn launch_simple_gui(sql: String) -> Result<()> {
     vizcreate(sql)
 }
 
-#[cfg(feature = "gui")]
+#[cfg(all(not(target_arch = "wasm32"), feature = "gui", feature = "duckdb"))]
 #[deprecated(since = "0.2.0", note = "Use `vizcreate_example` instead")]
 pub fn launch_gui() -> Result<()> {
     vizcreate_example()
 }
 
+// ============================================================================
+// Python bindings
+// ============================================================================
+
+#[cfg(feature = "python")]
 mod python_bindings;

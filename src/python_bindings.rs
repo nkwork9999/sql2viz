@@ -1,6 +1,8 @@
+#![cfg(feature = "python")]
+
 use pyo3::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
-use crate::{DuckTable, QueryResult};
+use crate::DuckTable;
 
 /// Python wrapper for DuckTable
 #[pyclass]
@@ -64,6 +66,76 @@ impl PyQueryResult {
     }
 }
 
+/// Python wrapper for VizBuilder
+#[cfg(feature = "gui")]
+#[pyclass]
+pub struct PyVizBuilder {
+    inner: crate::VizBuilder,
+}
+
+#[cfg(feature = "gui")]
+#[pymethods]
+impl PyVizBuilder {
+    #[new]
+    fn new() -> Self {
+        Self {
+            inner: crate::VizBuilder::new(),
+        }
+    }
+
+    /// クエリを追加
+    /// 
+    /// メソッドチェーンのために selfを返す
+    fn add_query(&mut self, sql: &str) {
+        self.inner = self.inner.clone().add_query(sql);
+    }
+
+    /// 直前に追加したクエリにチャート設定を適用
+    /// 
+    /// Parameters:
+    /// -----------
+    /// chart_type : str
+    ///     "Bar", "Line", "Area", "Scatter" のいずれか
+    /// x_column : str
+    ///     X軸に使用する列名
+    /// y_column : str
+    ///     Y軸に使用する列名
+    fn with_chart(
+        &mut self,
+        chart_type: &str,
+        x_column: &str,
+        y_column: &str,
+    ) -> PyResult<()> {
+        let chart_type = match chart_type {
+            "Bar" => crate::ChartType::Bar,
+            "Line" => crate::ChartType::Line,
+            "Area" => crate::ChartType::Area,
+            "Scatter" => crate::ChartType::Scatter,
+            _ => {
+                return Err(PyRuntimeError::new_err(format!(
+                    "Invalid chart type: '{}'. Must be one of: 'Bar', 'Line', 'Area', 'Scatter'",
+                    chart_type
+                )))
+            }
+        };
+
+        self.inner = self.inner.clone().with_chart(chart_type, x_column, y_column);
+        Ok(())
+    }
+
+    /// GUIを起動
+    fn launch(&self) -> PyResult<()> {
+        self.inner
+            .clone()
+            .launch()
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    fn __repr__(&self) -> String {
+        "VizBuilder()".to_string()
+    }
+}
+
 /// Launch visualization GUI
 #[pyfunction]
 fn vizcreate(sql: String) -> PyResult<()> {
@@ -72,7 +144,7 @@ fn vizcreate(sql: String) -> PyResult<()> {
         crate::vizcreate(sql)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
-    
+
     #[cfg(not(feature = "gui"))]
     {
         Err(PyRuntimeError::new_err(
@@ -86,9 +158,13 @@ fn vizcreate(sql: String) -> PyResult<()> {
 fn sql2viz(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDuckTable>()?;
     m.add_class::<PyQueryResult>()?;
+
+    #[cfg(feature = "gui")]
+    m.add_class::<PyVizBuilder>()?;
+
     m.add_function(wrap_pyfunction!(vizcreate, m)?)?;
-    
+
     m.add("__version__", "0.2.0")?;
-    
+
     Ok(())
 }
