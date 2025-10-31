@@ -21,13 +21,13 @@ thiserror = "2.0"
 # DuckDB (ネイティブのみ)
 duckdb = { version = "1.4", features = ["bundled"], optional = true }
 
-# Python bindings (optional, enabled with "python" feature)
+# Python bindings (optional)
 pyo3 = { version = "0.22", features = ["extension-module"], optional = true }
 
-# GUI dependencies (optional, enabled with "gui" feature)
+# GUI dependencies (ネイティブのみ)
 iced = { version = "0.13", features = ["canvas"], optional = true }
 
-# WASM dependencies (optional, enabled with "wasm" feature)
+# WASM dependencies
 wasm-bindgen = { version = "0.2", optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }
 js-sys = { version = "0.3", optional = true }
@@ -36,13 +36,17 @@ web-sys = { version = "0.3", features = [
     "Window",
     "Document",
     "HtmlCanvasElement",
+    "CanvasRenderingContext2d",
+    "TextMetrics",
 ], optional = true }
-serde = { version = "1.0", features = ["derive"], optional = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 serde-wasm-bindgen = { version = "0.6", optional = true }
 console_error_panic_hook = { version = "0.1", optional = true }
 
 [features]
-default = ["duckdb", "gui"]
+default = ["native"]
+native = ["duckdb", "gui"]
 gui = ["iced"]
 python = ["pyo3", "duckdb"]
 wasm = [
@@ -50,9 +54,7 @@ wasm = [
     "wasm-bindgen-futures",
     "js-sys",
     "web-sys",
-    "serde",
     "serde-wasm-bindgen",
-    "iced",
     "console_error_panic_hook",
 ]
 
