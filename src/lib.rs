@@ -1,13 +1,12 @@
-// src/lib.rs - SQL2VIZ完全版 (ネイティブ + WASM対応)
-// VizBuilder, ChartConfig, Python bindingsすべて含む
-
-use anyhow::Result;
 use thiserror::Error;
 
-// ============================================================================
-// エラー型定義
-// ============================================================================
+#[cfg(feature = "gui")]
+use anyhow::Result;
 
+#[cfg(feature = "gui")]
+use duckdb::{params, Connection, Row};
+
+/// Custom error types for the library
 #[derive(Error, Debug)]
 pub enum DuckTableError {
     #[error("DuckDB error: {0}")]
@@ -20,74 +19,61 @@ pub enum DuckTableError {
     IoError(String),
 }
 
-// DuckDB Error からの変換（ネイティブのみ）
-#[cfg(all(not(target_arch = "wasm32"), feature = "duckdb"))]
+#[cfg(feature = "gui")]
 impl From<duckdb::Error> for DuckTableError {
     fn from(err: duckdb::Error) -> Self {
         DuckTableError::DatabaseError(err.to_string())
     }
 }
 
-// std::io::Error からの変換
 impl From<std::io::Error> for DuckTableError {
     fn from(err: std::io::Error) -> Self {
         DuckTableError::IoError(err.to_string())
     }
 }
 
-// ============================================================================
-// 共通データ型
-// ============================================================================
+/// Main struct for executing queries and displaying results
+#[cfg(feature = "gui")]
+pub struct DuckTable {
+    connection: Connection,
+}
 
-/// クエリ結果を保持する構造体
+/// Result of a query execution
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "wasm", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(target_arch = "wasm32", derive(serde::Serialize, serde::Deserialize))]
 pub struct QueryResult {
     pub column_names: Vec<String>,
     pub rows: Vec<Vec<String>>,
 }
 
-// ============================================================================
-// ネイティブ専用: DuckDB処理
-// ============================================================================
-
-#[cfg(all(not(target_arch = "wasm32"), feature = "duckdb"))]
-use duckdb::{params, Connection, Row};
-
-/// DuckDB接続を保持する構造体（ネイティブ専用）
-#[cfg(all(not(target_arch = "wasm32"), feature = "duckdb"))]
-pub struct DuckTable {
-    connection: Connection,
-}
-
-#[cfg(all(not(target_arch = "wasm32"), feature = "duckdb"))]
+#[cfg(feature = "gui")]
 impl DuckTable {
-    /// インメモリデータベースを作成
+    /// Create a new DuckTable with an in-memory database
     pub fn new() -> Result<Self> {
         Ok(Self {
             connection: Connection::open_in_memory()?,
         })
     }
 
-    /// ファイルベースのデータベースを開く
+    /// Create a new DuckTable with a file-based database
     pub fn with_file(path: &str) -> Result<Self> {
         Ok(Self {
             connection: Connection::open(path)?,
         })
     }
 
-    /// 既存の接続を使用
+    /// Create with existing connection
     pub fn with_connection(connection: Connection) -> Self {
         Self { connection }
     }
 
-    /// SQLクエリを実行して文字列結果を返す
+    /// Execute a SQL query and return formatted table as string
     pub fn query(&self, sql: &str) -> Result<String> {
         let result = self.query_raw(sql)?;
         Ok(format!("Query returned {} rows", result.rows.len()))
     }
 
-    /// SQLクエリを実行してQueryResultを返す
+    /// Execute a SQL query and return raw QueryResult
     pub fn query_raw(&self, sql: &str) -> Result<QueryResult> {
         let mut stmt = self.connection.prepare(sql)?;
         let mut rows = stmt.query(params![])?;
@@ -133,7 +119,7 @@ impl DuckTable {
         })
     }
 
-    /// 行から値を安全に抽出
+    /// Extract value from a row safely
     fn extract_value_from_row(&self, row: &Row, index: usize) -> String {
         use duckdb::types::ValueRef;
 
@@ -200,7 +186,7 @@ impl DuckTable {
         }
     }
 
-    /// 複数のクエリを実行
+    /// Execute multiple queries and display all results
     pub fn query_multiple(&self, queries: &[&str]) -> Result<Vec<String>> {
         let mut results = Vec::new();
         for query in queries {
@@ -209,13 +195,13 @@ impl DuckTable {
         Ok(results)
     }
 
-    /// クエリ実行計画を取得
+    /// Get query execution plan
     pub fn explain(&self, sql: &str) -> Result<String> {
         let explain_sql = format!("EXPLAIN {}", sql);
         self.query(&explain_sql)
     }
 
-    /// クエリ実行計画を分析付きで取得
+    /// Get query execution plan with analyze
     pub fn explain_analyze(&self, sql: &str) -> Result<String> {
         let explain_sql = format!("EXPLAIN ANALYZE {}", sql);
         self.query(&explain_sql)
@@ -223,107 +209,330 @@ impl DuckTable {
 }
 
 // ============================================================================
-// WASM専用: JavaScript連携
+// WASM専用コード
 // ============================================================================
 
-#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
-#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
-use serde::{Deserialize, Serialize};
-
-/// WASM用のQueryResult（JavaScriptから呼び出し可能）
-#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
-#[derive(Serialize, Deserialize)]
-pub struct WasmQueryResult {
-    column_names: Vec<String>,
-    rows: Vec<Vec<String>>,
+pub struct WasmVizBuilder {
+    chart_type: String,
+    title: String,
 }
 
-#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
-impl WasmQueryResult {
-    /// コンストラクタ
+impl WasmVizBuilder {
     #[wasm_bindgen(constructor)]
-    pub fn new(column_names: Vec<String>, rows: Vec<Vec<String>>) -> Self {
-        Self { column_names, rows }
-    }
-
-    /// カラム名を取得
-    #[wasm_bindgen(getter)]
-    pub fn column_names(&self) -> Vec<String> {
-        self.column_names.clone()
-    }
-
-    /// 行データを取得
-    #[wasm_bindgen(getter)]
-    pub fn rows(&self) -> JsValue {
-        serde_wasm_bindgen::to_value(&self.rows).unwrap_or(JsValue::NULL)
-    }
-}
-
-#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
-impl From<WasmQueryResult> for QueryResult {
-    fn from(wasm_result: WasmQueryResult) -> Self {
-        QueryResult {
-            column_names: wasm_result.column_names,
-            rows: wasm_result.rows,
+    pub fn new() -> Self {
+        #[cfg(feature = "console_error_panic_hook")]
+        console_error_panic_hook::set_once();
+        
+        Self {
+            chart_type: "bar".to_string(),
+            title: "Chart".to_string(),
         }
     }
+
+    #[wasm_bindgen(js_name = setTitle)]
+    pub fn set_title(&mut self, title: String) {
+        self.title = title;
+    }
+
+    #[wasm_bindgen(js_name = setChartType)]
+    pub fn set_chart_type(&mut self, chart_type: String) {
+        self.chart_type = chart_type;
+    }
+
+    #[wasm_bindgen(js_name = renderChart)]
+    pub fn render_chart(
+        &self,
+        canvas: web_sys::HtmlCanvasElement,
+        data: JsValue,
+    ) -> Result<(), JsValue> {
+        let result: QueryResult = serde_wasm_bindgen::from_value(data)
+            .map_err(|e| JsValue::from_str(&format!("Failed to parse data: {}", e)))?;
+
+        let context = canvas
+            .get_context("2d")
+            .map_err(|_| JsValue::from_str("Failed to get 2d context"))?
+            .ok_or_else(|| JsValue::from_str("No 2d context"))?
+            .dyn_into::<web_sys::CanvasRenderingContext2d>()
+            .map_err(|_| JsValue::from_str("Failed to cast to 2d context"))?;
+
+        match self.chart_type.as_str() {
+            "bar" => self.draw_bar_chart(&context, &canvas, &result)?,
+            "line" => self.draw_line_chart(&context, &canvas, &result)?,
+            "pie" => self.draw_pie_chart(&context, &canvas, &result)?,
+            "scatter" => self.draw_scatter_chart(&context, &canvas, &result)?,
+            _ => self.draw_bar_chart(&context, &canvas, &result)?,
+        }
+
+        Ok(())
+    }
 }
 
-/// WASM初期化
-#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+#[cfg(target_arch = "wasm32")]
+impl WasmVizBuilder {
+    fn draw_bar_chart(
+        &self,
+        ctx: &web_sys::CanvasRenderingContext2d,
+        canvas: &web_sys::HtmlCanvasElement,
+        result: &QueryResult,
+    ) -> Result<(), JsValue> {
+        let width = canvas.width() as f64;
+        let height = canvas.height() as f64;
+        
+        ctx.clear_rect(0.0, 0.0, width, height);
+        ctx.set_font("20px sans-serif");
+        ctx.set_fill_style_str("#333");
+        ctx.fill_text(&self.title, width / 2.0 - 50.0, 30.0)?;
+        
+        if result.rows.is_empty() {
+            return Ok(());
+        }
+        
+        let margin = 60.0;
+        let chart_width = width - 2.0 * margin;
+        let chart_height = height - 2.0 * margin;
+        
+        ctx.begin_path();
+        ctx.move_to(margin, margin);
+        ctx.line_to(margin, height - margin);
+        ctx.line_to(width - margin, height - margin);
+        ctx.set_stroke_style_str("#666");
+        ctx.stroke();
+        
+        let bar_width = chart_width / result.rows.len() as f64 * 0.8;
+        let max_value = result.rows.iter()
+            .filter_map(|row| row.get(1).and_then(|v| v.parse::<f64>().ok()))
+            .fold(0.0_f64, |a, b| a.max(b));
+        
+        for (i, row) in result.rows.iter().enumerate() {
+            if let (Some(label), Some(value_str)) = (row.get(0), row.get(1)) {
+                if let Ok(value) = value_str.parse::<f64>() {
+                    let x = margin + (i as f64 * chart_width / result.rows.len() as f64);
+                    let bar_height = (value / max_value) * chart_height;
+                    let y = height - margin - bar_height;
+                    
+                    ctx.set_fill_style_str("#4CAF50");
+                    ctx.fill_rect(x, y, bar_width, bar_height);
+                    
+                    ctx.set_font("12px sans-serif");
+                    ctx.set_fill_style_str("#333");
+                    ctx.fill_text(label, x, height - margin + 20.0)?;
+                    ctx.fill_text(&format!("{:.1}", value), x, y - 5.0)?;
+                }
+            }
+        }
+        
+        Ok(())
+    }
+
+    fn draw_line_chart(
+        &self,
+        ctx: &web_sys::CanvasRenderingContext2d,
+        canvas: &web_sys::HtmlCanvasElement,
+        result: &QueryResult,
+    ) -> Result<(), JsValue> {
+        let width = canvas.width() as f64;
+        let height = canvas.height() as f64;
+        
+        ctx.clear_rect(0.0, 0.0, width, height);
+        ctx.set_font("20px sans-serif");
+        ctx.set_fill_style_str("#333");
+        ctx.fill_text(&self.title, width / 2.0 - 50.0, 30.0)?;
+        
+        if result.rows.is_empty() {
+            return Ok(());
+        }
+        
+        let margin = 60.0;
+        let chart_width = width - 2.0 * margin;
+        let chart_height = height - 2.0 * margin;
+        
+        ctx.begin_path();
+        ctx.move_to(margin, margin);
+        ctx.line_to(margin, height - margin);
+        ctx.line_to(width - margin, height - margin);
+        ctx.set_stroke_style_str("#666");
+        ctx.stroke();
+        
+        let max_value = result.rows.iter()
+            .filter_map(|row| row.get(1).and_then(|v| v.parse::<f64>().ok()))
+            .fold(0.0_f64, |a, b| a.max(b));
+        
+        ctx.begin_path();
+        for (i, row) in result.rows.iter().enumerate() {
+            if let (Some(_label), Some(value_str)) = (row.get(0), row.get(1)) {
+                if let Ok(value) = value_str.parse::<f64>() {
+                    let x = margin + (i as f64 / (result.rows.len() - 1) as f64) * chart_width;
+                    let y = height - margin - (value / max_value) * chart_height;
+                    
+                    if i == 0 {
+                        ctx.move_to(x, y);
+                    } else {
+                        ctx.line_to(x, y);
+                    }
+                    
+                    ctx.set_fill_style_str("#2196F3");
+                    ctx.fill_rect(x - 3.0, y - 3.0, 6.0, 6.0);
+                }
+            }
+        }
+        
+        ctx.set_stroke_style_str("#2196F3");
+        ctx.set_line_width(2.0);
+        ctx.stroke();
+        
+        Ok(())
+    }
+
+    fn draw_pie_chart(
+        &self,
+        ctx: &web_sys::CanvasRenderingContext2d,
+        canvas: &web_sys::HtmlCanvasElement,
+        result: &QueryResult,
+    ) -> Result<(), JsValue> {
+        let width = canvas.width() as f64;
+        let height = canvas.height() as f64;
+        
+        ctx.clear_rect(0.0, 0.0, width, height);
+        ctx.set_font("20px sans-serif");
+        ctx.set_fill_style_str("#333");
+        ctx.fill_text(&self.title, width / 2.0 - 50.0, 30.0)?;
+        
+        if result.rows.is_empty() {
+            return Ok(());
+        }
+        
+        let center_x = width / 2.0;
+        let center_y = height / 2.0 + 20.0;
+        let radius = (width.min(height) / 2.0 - 100.0).max(50.0);
+        
+        let total: f64 = result.rows.iter()
+            .filter_map(|row| row.get(1).and_then(|v| v.parse::<f64>().ok()))
+            .sum();
+        
+        let colors = ["#FF6384", "#36A2EB", "#FFCE56", "#4BC0C0", "#9966FF", "#FF9F40"];
+        let mut current_angle = -std::f64::consts::PI / 2.0;
+        
+        for (i, row) in result.rows.iter().enumerate() {
+            if let (Some(label), Some(value_str)) = (row.get(0), row.get(1)) {
+                if let Ok(value) = value_str.parse::<f64>() {
+                    let slice_angle = (value / total) * 2.0 * std::f64::consts::PI;
+                    
+                    ctx.begin_path();
+                    ctx.move_to(center_x, center_y);
+                    ctx.arc(center_x, center_y, radius, current_angle, current_angle + slice_angle)?;
+                    ctx.close_path();
+                    
+                    ctx.set_fill_style_str(colors[i % colors.len()]);
+                    ctx.fill();
+                    
+                    ctx.set_stroke_style_str("#fff");
+                    ctx.set_line_width(2.0);
+                    ctx.stroke();
+                    
+                    let label_angle = current_angle + slice_angle / 2.0;
+                    let label_x = center_x + (radius + 30.0) * label_angle.cos();
+                    let label_y = center_y + (radius + 30.0) * label_angle.sin();
+                    
+                    ctx.set_font("12px sans-serif");
+                    ctx.set_fill_style_str("#333");
+                    ctx.fill_text(&format!("{}: {:.1}%", label, (value / total) * 100.0), label_x, label_y)?;
+                    
+                    current_angle += slice_angle;
+                }
+            }
+        }
+        
+        Ok(())
+    }
+
+    fn draw_scatter_chart(
+        &self,
+        ctx: &web_sys::CanvasRenderingContext2d,
+        canvas: &web_sys::HtmlCanvasElement,
+        result: &QueryResult,
+    ) -> Result<(), JsValue> {
+        let width = canvas.width() as f64;
+        let height = canvas.height() as f64;
+        
+        ctx.clear_rect(0.0, 0.0, width, height);
+        ctx.set_font("20px sans-serif");
+        ctx.set_fill_style_str("#333");
+        ctx.fill_text(&self.title, width / 2.0 - 50.0, 30.0)?;
+        
+        if result.rows.is_empty() || result.column_names.len() < 2 {
+            return Ok(());
+        }
+        
+        let margin = 60.0;
+        let chart_width = width - 2.0 * margin;
+        let chart_height = height - 2.0 * margin;
+        
+        ctx.begin_path();
+        ctx.move_to(margin, margin);
+        ctx.line_to(margin, height - margin);
+        ctx.line_to(width - margin, height - margin);
+        ctx.set_stroke_style_str("#666");
+        ctx.stroke();
+        
+        let max_x = result.rows.iter()
+            .filter_map(|row| row.get(0).and_then(|v| v.parse::<f64>().ok()))
+            .fold(0.0_f64, |a, b| a.max(b));
+        
+        let max_y = result.rows.iter()
+            .filter_map(|row| row.get(1).and_then(|v| v.parse::<f64>().ok()))
+            .fold(0.0_f64, |a, b| a.max(b));
+        
+        ctx.set_fill_style_str("#9C27B0");
+        for row in &result.rows {
+            if let (Some(x_str), Some(y_str)) = (row.get(0), row.get(1)) {
+                if let (Ok(x_val), Ok(y_val)) = (x_str.parse::<f64>(), y_str.parse::<f64>()) {
+                    let x = margin + (x_val / max_x) * chart_width;
+                    let y = height - margin - (y_val / max_y) * chart_height;
+                    
+                    ctx.begin_path();
+                    ctx.arc(x, y, 5.0, 0.0, 2.0 * std::f64::consts::PI)?;
+                    ctx.fill();
+                }
+            }
+        }
+        
+        Ok(())
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(start)]
 pub fn wasm_main() {
-    // パニック時のスタックトレース表示を改善
     #[cfg(feature = "console_error_panic_hook")]
     console_error_panic_hook::set_once();
     
-    // ブラウザコンソールにログ出力
     web_sys::console::log_1(&"SQL2VIZ WASM initialized".into());
 }
 
-/// JavaScriptからクエリ結果を受け取ってGUIを起動（WASM専用）
-#[cfg(all(target_arch = "wasm32", feature = "wasm", feature = "gui"))]
-#[wasm_bindgen]
-pub fn vizcreate_wasm(query_result: WasmQueryResult) -> Result<(), JsValue> {
-    let result: QueryResult = query_result.into();
-    
-    let tabs = vec![QueryTab {
-        name: "Query Result".to_string(),
-        result: Some(result.clone()),
-        error: None,
-        view_mode: ViewMode::Table,
-        chart_type: ChartType::Bar,
-        x_axis_column: result.column_names.first().cloned(),
-        y_axis_column: result.column_names.get(1).or_else(|| result.column_names.first()).cloned(),
-    }];
-
-    let app_state = AppState::with_tabs(tabs);
-
-    iced::application("SQL2VIZ - WASM", AppState::update, AppState::view)
-        .theme(AppState::theme)
-        .run_with(move || (app_state.clone(), iced::Task::none()))
-        .map_err(|e| JsValue::from_str(&format!("Failed to run app: {:?}", e)))
-}
-
 // ============================================================================
-// GUI Components (Iced Implementation) - ネイティブ & WASM共通
+// GUI Components (enabled with "gui" feature) - Iced Implementation
 // ============================================================================
 
 #[cfg(feature = "gui")]
-use iced::widget::{button, canvas, column, container, pick_list, row, scrollable, text};
+use iced::widget::{button, column, container, pick_list, row, scrollable, text, canvas};
 
 #[cfg(feature = "gui")]
-use iced::{Alignment, Color, Element, Font, Length, Point, Rectangle, Size, Task, Theme};
-
+use iced::{Alignment, Element, Length, Task, Theme, Color, Point, Rectangle, Size, Font};
 #[cfg(feature = "gui")]
 use std::sync::{Arc, Mutex};
 
 #[cfg(feature = "gui")]
 static SQL_STORAGE: std::sync::OnceLock<Arc<Mutex<String>>> = std::sync::OnceLock::new();
+
+#[cfg(feature = "gui")]
+static CONFIGS_STORAGE: std::sync::OnceLock<Arc<Mutex<Vec<ChartConfig>>>> = std::sync::OnceLock::new();
 
 #[cfg(feature = "gui")]
 #[derive(Debug, Clone)]
@@ -415,20 +624,7 @@ pub struct AppState {
 #[cfg(feature = "gui")]
 impl AppState {
     pub fn new(sql: String) -> Self {
-        #[cfg(all(not(target_arch = "wasm32"), feature = "duckdb"))]
         let tabs = execute_queries_with_configs(&sql);
-        
-        #[cfg(any(target_arch = "wasm32", not(feature = "duckdb")))]
-        let tabs = vec![QueryTab {
-            name: "Error".to_string(),
-            result: None,
-            error: Some("DuckDB not available in WASM. Use vizcreate_wasm() instead.".to_string()),
-            view_mode: ViewMode::Table,
-            chart_type: ChartType::Bar,
-            x_axis_column: None,
-            y_axis_column: None,
-        }];
-        
         Self::with_tabs(tabs)
     }
     
@@ -483,7 +679,7 @@ impl AppState {
 
         let mut content = column![].spacing(10).padding(20);
 
-        // Tab selector (if multiple tabs)
+        // Tab selector
         if self.tabs.len() > 1 {
             let tab_buttons: Vec<Element<Message>> = self
                 .tabs
@@ -493,7 +689,6 @@ impl AppState {
                     let btn = button(text(&tab.name))
                         .padding(10)
                         .on_press(Message::TabSelected(idx));
-                    
                     Element::from(btn)
                 })
                 .collect();
@@ -529,7 +724,6 @@ impl AppState {
 
                 content = content.push(error_display);
             } else if let Some(result) = &current_tab.result {
-                // Header with view mode selector
                 let header = row![
                     column![
                         text(format!("📊 {} Results", current_tab.name))
@@ -559,7 +753,6 @@ impl AppState {
 
                 content = content.push(header);
 
-                // Chart type selector (only in chart mode)
                 if current_tab.view_mode == ViewMode::Chart {
                     let chart_selector = row![
                         text("Chart Type:").size(16).color(Color::BLACK),
@@ -575,7 +768,6 @@ impl AppState {
 
                     content = content.push(chart_selector);
                     
-                    // Column selection for chart axes
                     let column_options: Vec<String> = result.column_names.clone();
                     
                     if !column_options.is_empty() {
@@ -602,7 +794,6 @@ impl AppState {
                     }
                 }
 
-                // Content based on view mode
                 match current_tab.view_mode {
                     ViewMode::Table => {
                         let table_view = Self::render_table(result);
@@ -626,7 +817,6 @@ impl AppState {
     fn render_table<'a>(result: &'a QueryResult) -> Element<'a, Message> {
         let mut table_content = column![].spacing(0);
 
-        // Header row
         let header_cells: Vec<Element<'a, Message>> = result
             .column_names
             .iter()
@@ -652,7 +842,6 @@ impl AppState {
         let header_row = row(header_cells).spacing(0);
         table_content = table_content.push(header_row);
 
-        // Data rows
         for (idx, row_data) in result.rows.iter().enumerate() {
             let cells: Vec<Element<'a, Message>> = row_data
                 .iter()
@@ -705,7 +894,7 @@ impl AppState {
         };
 
         let chart_container = column![
-            text(format!("Chart Type: {:?}", current_tab.chart_type))
+            text(format!("{}", current_tab.chart_type))
                 .size(16)
                 .color(Color::BLACK),
             text(chart_info_text)
@@ -830,7 +1019,7 @@ impl canvas::Program<Message> for ChartCanvas {
             );
         }
 
-        // Draw chart
+        // Draw chart based on type
         match self.chart_type {
             ChartType::Bar => {
                 for (i, &value) in y_values.iter().enumerate() {
@@ -1047,10 +1236,7 @@ impl canvas::Program<Message> for ChartCanvas {
     }
 }
 
-// ============================================================================
-// VizBuilder and ChartConfig
-// ============================================================================
-
+// VizBuilder implementation
 #[cfg(feature = "gui")]
 #[derive(Debug, Clone)]
 pub struct ChartConfig {
@@ -1069,9 +1255,6 @@ impl Default for ChartConfig {
         }
     }
 }
-
-#[cfg(feature = "gui")]
-static CONFIGS_STORAGE: std::sync::OnceLock<Arc<Mutex<Vec<ChartConfig>>>> = std::sync::OnceLock::new();
 
 #[cfg(feature = "gui")]
 #[derive(Clone)]
@@ -1139,11 +1322,7 @@ impl VizBuilder {
     }
 }
 
-// ============================================================================
-// ネイティブ専用: クエリ実行ヘルパー
-// ============================================================================
-
-#[cfg(all(not(target_arch = "wasm32"), feature = "duckdb", feature = "gui"))]
+#[cfg(feature = "gui")]
 fn execute_queries_with_configs(sql: &str) -> Vec<QueryTab> {
     let mut tabs = Vec::new();
 
@@ -1195,7 +1374,6 @@ fn execute_queries_with_configs(sql: &str) -> Vec<QueryTab> {
         return tabs;
     }
 
-    // 保存された設定を取得
     let configs = CONFIGS_STORAGE
         .get()
         .and_then(|storage| storage.lock().ok())
@@ -1205,19 +1383,16 @@ fn execute_queries_with_configs(sql: &str) -> Vec<QueryTab> {
     for (idx, query) in queries.iter().enumerate() {
         let tab_name = format!("Query {}", idx + 1);
         
-        // 対応する設定を取得（なければデフォルト）
         let config = configs.get(idx).cloned().unwrap_or_default();
 
         match duck_table.query_raw(query) {
             Ok(result) => {
-                // チャート設定がある場合は自動的にChartモードに
                 let view_mode = if config.chart_type.is_some() {
                     ViewMode::Chart
                 } else {
                     ViewMode::Table
                 };
 
-                // X軸・Y軸の初期値を設定
                 let x_col = config.x_axis_column.or_else(|| result.column_names.first().cloned());
                 let y_col = config.y_axis_column.or_else(|| {
                     result.column_names.get(1).or_else(|| result.column_names.first()).cloned()
@@ -1250,12 +1425,8 @@ fn execute_queries_with_configs(sql: &str) -> Vec<QueryTab> {
     tabs
 }
 
-// ============================================================================
-// ネイティブ専用: 公開API
-// ============================================================================
-
-/// Launch SQL2VIZ GUI with custom SQL query (ネイティブ専用)
-#[cfg(all(not(target_arch = "wasm32"), feature = "gui", feature = "duckdb"))]
+/// Launch SQL2VIZ GUI with custom SQL query
+#[cfg(feature = "gui")]
 pub fn vizcreate(sql: String) -> Result<()> {
     if sql.trim().is_empty() {
         return Err(anyhow::anyhow!("No SQL query provided"));
@@ -1278,29 +1449,25 @@ pub fn vizcreate(sql: String) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to launch GUI: {}", e))
 }
 
-/// Launch SQL2VIZ GUI with an example query (ネイティブ専用)
-#[cfg(all(not(target_arch = "wasm32"), feature = "gui", feature = "duckdb"))]
+/// Launch SQL2VIZ GUI with an example query
+#[cfg(feature = "gui")]
 pub fn vizcreate_example() -> Result<()> {
     let example = "SELECT 'Example' as name, 42 as value";
     vizcreate(example.to_string())
 }
 
 // 後方互換性のため古い関数名も残す（非推奨）
-#[cfg(all(not(target_arch = "wasm32"), feature = "gui", feature = "duckdb"))]
+#[cfg(feature = "gui")]
 #[deprecated(since = "0.2.0", note = "Use `vizcreate` instead")]
 pub fn launch_simple_gui(sql: String) -> Result<()> {
     vizcreate(sql)
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "gui", feature = "duckdb"))]
+#[cfg(feature = "gui")]
 #[deprecated(since = "0.2.0", note = "Use `vizcreate_example` instead")]
 pub fn launch_gui() -> Result<()> {
     vizcreate_example()
 }
-
-// ============================================================================
-// Python bindings
-// ============================================================================
 
 #[cfg(feature = "python")]
 mod python_bindings;
