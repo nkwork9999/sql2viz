@@ -5,8 +5,38 @@ build-backend = "maturin"
 [project]
 name = "sql2viz"
 version = "0.2.0"
+description = "SQL query visualization library with DuckDB backend and GUI support"
+readme = "README.md"
 requires-python = ">=3.8"
+license = { text = "MIT" }
+
+keywords = ["sql", "visualization", "duckdb", "gui", "chart"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Rust",
+    "Topic :: Database",
+    "Topic :: Scientific/Engineering :: Visualization",
+]
+dependencies = [
+    "duckdb>=0.9.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/nkwork9999/sql2viz"
+Documentation = "https://github.com/nkwork9999/sql2viz/blob/dev/README.md"
+Repository = "https://github.com/nkwork9999/sql2viz"
+Issues = "https://github.com/nkwork9999/sql2viz/issues"
 
 [tool.maturin]
-features = ["pyo3/extension-module"]
+features = ["python", "gui"]
 python-source = "python"
+module-name = "sql2viz.sql2viz"

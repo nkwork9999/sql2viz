@@ -1,0 +1,34 @@
+{
+  "name": "@nkwork9999/sql2viz-wasm",
+  "version": "0.2.0",
+  "description": "SQL visualization library compiled to WebAssembly",
+  "main": "sql2viz.js",
+  "types": "sql2viz.d.ts",
+  "files": [
+    "sql2viz_bg.wasm",
+    "sql2viz.js",
+    "sql2viz.d.ts",
+    "sql2viz_bg.wasm.d.ts"
+  ],
+  "scripts": {
+    "build": "wasm-pack build --target web --features wasm --release"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nkwork9999/sql2viz.git"
+  },
+  "keywords": [
+    "sql",
+    "visualization",
+    "wasm",
+    "webassembly",
+    "chart",
+    "canvas"
+  ],
+  "author": "Your Name <your.email@example.com>",
+  "license": "MIT OR Apache-2.0",
+  "bugs": {
+    "url": "https://github.com/nkwork9999/sql2viz/issues"
+  },
+  "homepage": "https://github.com/nkwork9999/sql2viz#readme"
+}
