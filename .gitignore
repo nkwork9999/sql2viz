@@ -55,3 +55,7 @@ desktop.ini
 # www/
 # test.py
 # pyproject.toml
+
+*.so
+*.dylib
+*.pyd
