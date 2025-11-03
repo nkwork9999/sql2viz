@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SQL2VIZ - DuckDB WASM Demo</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+        padding: 20px;
+      }
+      .container {
+        max-width: 1200px;
+        margin: 0 auto;
+        background: white;
+        border-radius: 16px;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        overflow: hidden;
+      }
+      header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 30px;
+        text-align: center;
+      }
+      h1 {
+        font-size: 2.5em;
+        margin-bottom: 10px;
+      }
+      .subtitle {
+        font-size: 1.1em;
+        opacity: 0.9;
+      }
+      main {
+        padding: 30px;
+      }
+      .section {
+        margin-bottom: 30px;
+      }
+      .section-title {
+        font-size: 1.3em;
+        color: #667eea;
+        margin-bottom: 15px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      #sql-input {
+        width: 100%;
+        height: 150px;
+        padding: 15px;
+        border: 2px solid #e0e0e0;
+        border-radius: 8px;
+        font-family: "Courier New", monospace;
+        font-size: 14px;
+        resize: vertical;
+      }
+      button {
+        padding: 12px 30px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: none;
+        border-radius: 6px;
+        font-size: 16px;
+        font-weight: 600;
+        cursor: pointer;
+        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+      }
+      button:hover {
+        transform: translateY(-2px);
+      }
+      button:disabled {
+        background: #ccc;
+        cursor: not-allowed;
+      }
+      select {
+        padding: 10px 15px;
+        border: 2px solid #e0e0e0;
+        border-radius: 6px;
+        font-size: 14px;
+      }
+      .controls {
+        display: flex;
+        gap: 15px;
+        margin-top: 15px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      .examples {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 10px;
+      }
+      .example-btn {
+        padding: 8px 16px;
+        background: white;
+        color: #667eea;
+        border: 2px solid #667eea;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      .example-btn:hover {
+        background: #667eea;
+        color: white;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 20px 0;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+      }
+      th {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 15px;
+        text-align: left;
+      }
+      td {
+        padding: 12px 15px;
+        border-bottom: 1px solid #f0f0f0;
+      }
+      tr:hover {
+        background: #f8f9ff;
+      }
+      canvas {
+        max-width: 100%;
+        display: block;
+        margin: 20px auto;
+        background: #f8f9ff;
+        border-radius: 8px;
+      }
+      .error {
+        background: #fee;
+        border-left: 4px solid #f44;
+        padding: 15px;
+        color: #c33;
+        margin: 15px 0;
+        border-radius: 4px;
+      }
+      .success {
+        background: #efe;
+        border-left: 4px solid #4c4;
+        padding: 15px;
+        color: #363;
+        margin: 15px 0;
+        border-radius: 4px;
+      }
+      .loading {
+        text-align: center;
+        padding: 40px;
+        color: #667eea;
+        font-size: 1.2em;
+      }
+      footer {
+        background: #f8f9ff;
+        padding: 20px;
+        text-align: center;
+        color: #666;
+        font-size: 0.9em;
+      }
+      footer a {
+        color: #667eea;
+        text-decoration: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <header>
+        <h1>🎨 SQL2VIZ</h1>
+        <p class="subtitle">DuckDB WASM + Rust WASM による高速データ可視化</p>
+      </header>
+      <main>
+        <div class="section">
+          <div class="section-title">📝 SQLクエリ</div>
+          <textarea id="sql-input">
+SELECT 'Apple' as product, 120 as sales 
+UNION ALL SELECT 'Banana', 150 
+UNION ALL SELECT 'Orange', 80
+UNION ALL SELECT 'Grape', 95
+UNION ALL SELECT 'Mango', 110;</textarea
+          >
+
+          <div class="controls">
+            <label
+              >チャートタイプ:
+              <select id="chart-type">
+                <option value="bar">棒グラフ</option>
+                <option value="line">折れ線グラフ</option>
+                <option value="pie">円グラフ</option>
+                <option value="scatter">散布図</option>
+              </select>
+            </label>
+            <button id="run-btn" onclick="runQuery()">🚀 実行</button>
+          </div>
+
+          <div class="section-title" style="margin-top: 20px">
+            💡 サンプルクエリ
+          </div>
+          <div class="examples">
+            <button class="example-btn" onclick="loadExample('sales')">
+              売上データ
+            </button>
+            <button class="example-btn" onclick="loadExample('time-series')">
+              時系列データ
+            </button>
+            <button class="example-btn" onclick="loadExample('scatter')">
+              相関データ
+            </button>
+            <button class="example-btn" onclick="loadExample('complex')">
+              複雑なクエリ
+            </button>
+          </div>
+        </div>
+        <div id="result"></div>
+      </main>
+      <footer>
+        <p>
+          Powered by <a href="https://duckdb.org/" target="_blank">DuckDB</a> +
+          <a href="https://www.rust-lang.org/" target="_blank">Rust</a> +
+          <a href="https://webassembly.org/" target="_blank">WebAssembly</a>
+        </p>
+      </footer>
+    </div>
+
+    <script type="module">
+      import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@latest/+esm";
+      import init, { WasmVizBuilder } from "./pkg/sql2viz.js";
+
+      let db, conn, vizBuilder;
+      let isInitialized = false;
+
+      async function initDuckDB() {
+        try {
+          const JSDELIVR_BUNDLES = duckdb.getJsDelivrBundles();
+          const bundle = await duckdb.selectBundle(JSDELIVR_BUNDLES);
+          const worker_url = URL.createObjectURL(
+            new Blob([`importScripts("${bundle.mainWorker}");`], {
+              type: "text/javascript",
+            })
+          );
+          const worker = new Worker(worker_url);
+          db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
+          await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+          URL.revokeObjectURL(worker_url);
+          conn = await db.connect();
+          console.log("✅ DuckDB WASM initialized");
+          return true;
+        } catch (err) {
+          console.error("❌ DuckDB initialization failed:", err);
+          return false;
+        }
+      }
+
+      async function initRustWasm() {
+        try {
+          await init();
+          vizBuilder = new WasmVizBuilder();
+          console.log("✅ Rust WASM initialized");
+          return true;
+        } catch (err) {
+          console.error("❌ Rust WASM initialization failed:", err);
+          return false;
+        }
+      }
+
+      async function initialize() {
+        const resultDiv = document.getElementById("result");
+        resultDiv.innerHTML = '<div class="loading">初期化中...</div>';
+
+        const duckdbOk = await initDuckDB();
+        const rustOk = await initRustWasm();
+
+        if (duckdbOk && rustOk) {
+          isInitialized = true;
+          resultDiv.innerHTML =
+            '<div class="success">✅ 準備完了！SQLクエリを実行してください。</div>';
+          document.getElementById("run-btn").disabled = false;
+        } else {
+          resultDiv.innerHTML =
+            '<div class="error">❌ 初期化に失敗しました</div>';
+        }
+      }
+
+      window.runQuery = async function () {
+        if (!isInitialized) {
+          alert("システムの初期化が完了していません");
+          return;
+        }
+
+        const sql = document.getElementById("sql-input").value;
+        const chartType = document.getElementById("chart-type").value;
+        const resultDiv = document.getElementById("result");
+
+        try {
+          resultDiv.innerHTML = '<div class="loading">クエリを実行中...</div>';
+
+          const result = await conn.query(sql);
+          const columns = result.schema.fields.map((f) => f.name);
+          const rows = [];
+
+          for (let i = 0; i < result.numRows; i++) {
+            const row = [];
+            for (let j = 0; j < result.numCols; j++) {
+              const value = result.getChildAt(j).get(i);
+              row.push(value !== null ? String(value) : "");
+            }
+            rows.push(row);
+          }
+
+          console.log("Query result:", { columns, rows });
+
+          let html =
+            '<div class="section-title">📊 クエリ結果</div><table><tr>';
+          columns.forEach((col) => (html += `<th>${col}</th>`));
+          html += "</tr>";
+          rows.forEach((row) => {
+            html += "<tr>";
+            row.forEach((cell) => (html += `<td>${cell}</td>`));
+            html += "</tr>";
+          });
+          html += "</table>";
+
+          html += '<div class="section-title">📈 可視化</div>';
+          html +=
+            '<canvas id="chart-canvas" width="800" height="500"></canvas>';
+
+          resultDiv.innerHTML = html;
+
+          const canvas = document.getElementById("chart-canvas");
+          vizBuilder.setChartType(chartType);
+          vizBuilder.setTitle(`${columns.join(" vs ")}`);
+
+          // ⭐ 修正: column_names → column_names (Rustの構造体に合わせる)
+          const queryResult = {
+            column_names: columns, // ← これが重要！
+            rows: rows,
+          };
+
+          console.log("Sending to Rust:", queryResult);
+          vizBuilder.renderChart(canvas, queryResult);
+        } catch (err) {
+          resultDiv.innerHTML = `<div class="error"><strong>エラー:</strong> ${err.message}</div>`;
+          console.error("Query execution error:", err);
+        }
+      };
+
+      window.loadExample = function (type) {
+        const examples = {
+          sales: `SELECT 'Apple' as product, 120 as sales 
+UNION ALL SELECT 'Banana', 150 
+UNION ALL SELECT 'Orange', 80
+UNION ALL SELECT 'Grape', 95
+UNION ALL SELECT 'Mango', 110;`,
+
+          "time-series": `SELECT '2024-01' as month, 1000 as revenue
+UNION ALL SELECT '2024-02', 1200
+UNION ALL SELECT '2024-03', 1100
+UNION ALL SELECT '2024-04', 1400
+UNION ALL SELECT '2024-05', 1600
+UNION ALL SELECT '2024-06', 1800;`,
+
+          scatter: `SELECT 10 as x, 20 as y
+UNION ALL SELECT 15, 35
+UNION ALL SELECT 20, 30
+UNION ALL SELECT 25, 50
+UNION ALL SELECT 30, 45
+UNION ALL SELECT 35, 60
+UNION ALL SELECT 40, 55;`,
+
+          complex: `WITH sales_data AS (
+    SELECT 'Q1' as quarter, 1000 as amount
+    UNION ALL SELECT 'Q2', 1500
+    UNION ALL SELECT 'Q3', 1200
+    UNION ALL SELECT 'Q4', 1800
+)
+SELECT quarter, amount, 
+       amount * 1.1 as projected
+FROM sales_data
+ORDER BY quarter;`,
+        };
+
+        document.getElementById("sql-input").value =
+          examples[type] || examples["sales"];
+
+        if (type === "time-series") {
+          document.getElementById("chart-type").value = "line";
+        } else if (type === "scatter") {
+          document.getElementById("chart-type").value = "scatter";
+        } else {
+          document.getElementById("chart-type").value = "bar";
+        }
+      };
+
+      document.getElementById("run-btn").disabled = true;
+      initialize();
+    </script>
+  </body>
+</html>
