@@ -50,3 +50,8 @@ desktop.ini
 
 # Test files (optional - 個人的なテストファイルの場合)
 # test.py
+
+# python/
+# www/
+# test.py
+# pyproject.toml

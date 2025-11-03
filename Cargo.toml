@@ -8,6 +8,16 @@ repository = "https://github.com/nkwork9999/sql2viz"
 keywords = ["duckdb", "chart", "gui", "sql","wasm"]
 categories = ["visualization", "database", "gui","web-programming"]
 readme = "README.md"
+exclude = [
+    "python/sql2viz/__pycache__/",
+    "*.pyc",
+    "*.so",
+    "*.dylib",
+    "test.py",
+    "www/",
+    "pyproject.toml",
+    "python/",
+]
 
 [lib]
 name = "sql2viz"
@@ -77,3 +87,4 @@ all-features = true
 
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = ["-Oz", "--enable-mutable-globals"]
+
